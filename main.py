@@ -350,6 +350,38 @@ def scan_target(target, scan_data):
         scan_data['error'] = str(e)
         scan_data['end_time'] = datetime.now().isoformat()
 
+def run_sqlmap(target, commands=None, timeout=300):
+    """Запуск SQLMap для тестирования SQL инъекций"""
+    if commands is None:
+        commands = f"-u {target} --batch --level=1 --risk=1"
+    
+    try:
+        print(f"[+] Запуск SQLMap для {target}")
+        print(f"[+] Команда: sqlmap {commands}")
+        
+        result = subprocess.run(['sqlmap'] + commands.split(),
+                                capture_output=True, text=True, timeout=timeout)
+        
+        print(f"[+] SQLMap завершен для {target}")
+        print(f"[+] Код возврата: {result.returncode}")
+        print(f"[+] Вывод: {len(result.stdout)} символов")
+        
+        return {
+            'success': result.returncode == 0,
+            'output': result.stdout,
+            'error': result.stderr,
+            'returncode': result.returncode,
+            'commands': commands
+        }
+        
+    except subprocess.TimeoutExpired:
+        print(f"[-] Таймаут SQLMap для {target}")
+        return {'success': False, 'error': 'SQLMap timeout'}
+    except Exception as e:
+        print(f"[-] Ошибка SQLMap для {target}: {e}")
+        return {'success': False, 'error': str(e)}
+
+
 # =====================================================================================================================
 
 @app.route('/')
