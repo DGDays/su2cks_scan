@@ -44,15 +44,11 @@
                 {% endfor %}
             </div>
         </div>
-        
-        <a href="/">← Вернуться к сканеру</a>
-    </div>
-                
-    <div style="margin: 20px 0;">
-    <button onclick="saveAsPdf()" style="padding: 10px 15px; background: #dc3545; color: white; border: none; cursor: pointer;">
+                <button onclick="saveAsPdf()" style="padding: 10px 15px; background: #dc3545; color: white; border: none; cursor: pointer;">
         💾 Сохранить как PDF
     </button>
-</div>
+        
+        <a href="/">← Вернуться к сканеру</a>
 
 <script>
 function saveAsPdf() {
@@ -67,6 +63,8 @@ function saveAsPdf() {
     window.open(endpoint, '_blank');
 }
 </script>
+    </div>
+                
 
     <script>
         function scanHost(ip) {
