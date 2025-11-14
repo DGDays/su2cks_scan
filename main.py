@@ -211,9 +211,28 @@ def start_scan():
     if bool(re.match(ip_mask_strict_pattern, target)):
         # ARP сканирование сети
         ips = run_arp_scan(target)
+        
+        # Сохраняем ARP сканирование в историю
+        arp_scan_id = f"arp_{target}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        arp_scan_data = {
+            'id': arp_scan_id,
+            'target': target,
+            'type': 'arp_scan',
+            'status': 'completed',
+            'start_time': datetime.now().isoformat(),
+            'end_time': datetime.now().isoformat(),
+            'results': {
+                'hosts_found': len(ips),
+                'hosts': ips,
+                'network': target
+            }
+        }
+        scan_results[arp_scan_id] = arp_scan_data
+        
         return jsonify({
             'status': 'arp_completed',
             'arp': True,
+            'scan_id': arp_scan_id,
             'network': target,
             'hosts_found': len(ips),
             'hosts': ips,
@@ -226,6 +245,7 @@ def start_scan():
         scan_data = {
             'id': scan_id,
             'target': target,
+            'type': 'single_scan',
             'status': 'running',
             'start_time': datetime.now().isoformat(),
             'results': {}
@@ -244,7 +264,7 @@ def start_scan():
             'arp': False,
             'target': target
         })
-
+    
 @app.route('/api/scan/<scan_id>')
 def get_scan_status(scan_id):
     """API endpoint для получения статуса сканирования"""
@@ -268,6 +288,18 @@ def view_report(scan_id):
     
     return render_template('report.html', scan=scan_results[scan_id])
 
+@app.route('/arp_report/<scan_id>')
+def view_arp_report(scan_id):
+    """Страница с отчетом по ARP сканированию"""
+    if scan_id not in scan_results:
+        return "ARP report not found", 404
+    
+    scan_data = scan_results[scan_id]
+    if scan_data.get('type') != 'arp_scan':
+        return "This is not an ARP scan report", 400
+    
+    return render_template('arp_report.html', scan=scan_data)
+
 if __name__ == '__main__':
     # Создаем папку для шаблонов если её нет
     os.makedirs('templates', exist_ok=True)
@@ -290,7 +322,7 @@ if __name__ == '__main__':
         .running { background: #fff3cd; }
         .completed { background: #d1ecf1; }
         .error { background: #f8d7da; }
-        .arp-results { background: #e8f5e8; }
+        .arp-results { background: #e8f5e8; border: 2px solid #28a745; }
         .host-list { margin: 15px 0; }
         .host-item { 
             padding: 8px; 
@@ -309,8 +341,23 @@ if __name__ == '__main__':
             border: none; 
             border-radius: 3px;
             cursor: pointer;
+            margin-left: 10px;
         }
         .scan-host-btn:hover { background: #218838; }
+        .save-arp-btn { 
+            padding: 8px 15px; 
+            background: #6c757d; 
+            color: white; 
+            border: none; 
+            border-radius: 3px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        .save-arp-btn:hover { background: #545b62; }
+        .arp-permanent { 
+            background: #d4edda; 
+            border-left: 4px solid #28a745;
+        }
     </style>
 </head>
 <body>
@@ -328,9 +375,15 @@ if __name__ == '__main__':
         
         <h2>История сканирований</h2>
         <div id="scanList"></div>
+        
+        <!-- Постоянный блок для ARP результатов -->
+        <div id="arpHistory" style="margin-top: 30px;"></div>
     </div>
 
     <script>
+        // Глобальная переменная для хранения ARP результатов
+        let arpScans = [];
+        
         function startScan() {
             const target = document.getElementById('target').value;
             if (!target) return alert('Введите target');
@@ -344,6 +397,8 @@ if __name__ == '__main__':
             .then(data => {
                 if (data.status === 'arp_completed') {
                     showArpResults(data);
+                    // Сохраняем в историю ARP сканирований
+                    saveArpToHistory(data);
                 } else if (data.scan_id) {
                     checkStatus(data.scan_id);
                 }
@@ -359,7 +414,10 @@ if __name__ == '__main__':
             const resultsDiv = document.getElementById('results');
             let html = `<div class="status arp-results">
                 <h3>🔍 ARP Сканирование завершено: ${data.network}</h3>
-                <p>${data.message}</p>`;
+                <p>${data.message}</p>
+                <button class="save-arp-btn" onclick="saveArpToHistory(${JSON.stringify(data).replace(/"/g, '&quot;')})">
+                    💾 Сохранить это ARP сканирование
+                </button>`;
             
             if (data.hosts && data.hosts.length > 0) {
                 html += `<div class="host-list">
@@ -368,7 +426,9 @@ if __name__ == '__main__':
                 data.hosts.forEach(ip => {
                     html += `<div class="host-item">
                         <span>📡 ${ip}</span>
-                        <button class="scan-host-btn" onclick="scanSingleHost('${ip}')">Сканировать этот IP</button>
+                        <div>
+                            <button class="scan-host-btn" onclick="scanSingleHost('${ip}')">Сканировать</button>
+                        </div>
                     </div>`;
                 });
                 
@@ -381,10 +441,106 @@ if __name__ == '__main__':
             resultsDiv.innerHTML = html;
         }
         
+        function saveArpToHistory(arpData) {
+            // Добавляем timestamp для уникальности
+            arpData.timestamp = new Date().toISOString();
+            arpData.saved = true;
+            
+            // Добавляем в массив ARP сканирований
+            arpScans.unshift(arpData);
+            
+            // Сохраняем в localStorage
+            localStorage.setItem('arpScansHistory', JSON.stringify(arpScans));
+            
+            // Обновляем отображение истории ARP
+            renderArpHistory();
+            
+            // Показываем сообщение
+            showNotification('ARP сканирование сохранено в истории!');
+        }
+        
+        function renderArpHistory() {
+            const arpHistoryDiv = document.getElementById('arpHistory');
+            
+            if (arpScans.length === 0) {
+                arpHistoryDiv.innerHTML = '';
+                return;
+            }
+            
+            let html = `<h2>💾 Сохраненные ARP сканирования</h2>`;
+            
+            arpScans.forEach((scan, index) => {
+                html += `<div class="status arp-permanent">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <h4>🔍 ${scan.network} (${scan.hosts_found} хостов)</h4>
+                        <div>
+                            <button class="scan-host-btn" onclick="loadArpScan(${index})">Показать</button>
+                            <button class="scan-host-btn" style="background: #dc3545;" onclick="removeArpScan(${index})">Удалить</button>
+                        </div>
+                    </div>
+                    <p>Сохранено: ${new Date(scan.timestamp).toLocaleString()}</p>
+                </div>`;
+            });
+            
+            arpHistoryDiv.innerHTML = html;
+        }
+        
+        function loadArpScan(index) {
+            const scan = arpScans[index];
+            const resultsDiv = document.getElementById('results');
+            
+            let html = `<div class="status arp-results">
+                <h3>🔍 Сохраненное ARP сканирование: ${scan.network}</h3>
+                <p>${scan.message} (сохранено: ${new Date(scan.timestamp).toLocaleString()})</p>
+                <p><a href="/arp_report/${scan.scan_id}" target="_blank">📄 Открыть полный отчет</a></p>`;
+            
+            if (scan.hosts && scan.hosts.length > 0) {
+                html += `<div class="host-list">
+                    <h4>Найденные хосты:</h4>`;
+                
+                scan.hosts.forEach(ip => {
+                    html += `<div class="host-item">
+                        <span>📡 ${ip}</span>
+                        <button class="scan-host-btn" onclick="scanSingleHost('${ip}')">Сканировать</button>
+                    </div>`;
+                });
+                
+                html += `</div>`;
+            }
+            
+            html += `</div>`;
+            resultsDiv.innerHTML = html;
+            
+            // Прокручиваем к результатам
+            resultsDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        function removeArpScan(index) {
+            if (confirm('Удалить это ARP сканирование из истории?')) {
+                arpScans.splice(index, 1);
+                localStorage.setItem('arpScansHistory', JSON.stringify(arpScans));
+                renderArpHistory();
+                showNotification('ARP сканирование удалено из истории');
+            }
+        }
+        
         function scanSingleHost(ip) {
-            // Заполняем поле ввода и запускаем сканирование
             document.getElementById('target').value = ip;
             startScan();
+        }
+        
+        function showNotification(message) {
+            // Простое уведомление
+            alert(message);
+        }
+        
+        // Загружаем историю ARP из localStorage при загрузке страницы
+        function loadArpHistoryFromStorage() {
+            const saved = localStorage.getItem('arpScansHistory');
+            if (saved) {
+                arpScans = JSON.parse(saved);
+                renderArpHistory();
+            }
         }
         
         function checkStatus(scanId) {
@@ -403,29 +559,21 @@ if __name__ == '__main__':
                             html += `<p>Время завершения: ${scan.end_time}</p>`;
                             html += `<p><a href="/report/${scanId}" target="_blank">Посмотреть полный отчет</a></p>`;
                             
-                            // Быстрый предпросмотр
                             if (scan.results.nmap) {
                                 html += `<h4>Nmap результаты:</h4>`;
                                 html += `<pre>${JSON.stringify(scan.results.nmap.parsed_ports, null, 2)}</pre>`;
                             }
                             if (scan.results.nikto) {
-                                html += `<h4>Nikto результаты (порт ${scan.results.nikto.port}):</h4>`;
+                                html += `<h4>Nikto результаты:</h4>`;
                                 html += `<pre>${scan.results.nikto.output.substring(0, 500)}...</pre>`;
                             }
                         } else if (scan.status === 'running') {
                             html += `<p>Сканирование выполняется... (обновление через 3 секунды)</p>`;
                             setTimeout(poll, 3000);
-                        } else if (scan.status === 'error') {
-                            html += `<p>Ошибка: ${scan.error || 'Неизвестная ошибка'}</p>`;
                         }
                         
                         html += `</div>`;
                         resultsDiv.innerHTML = html;
-                    })
-                    .catch(error => {
-                        console.error('Error polling status:', error);
-                        resultsDiv.innerHTML = 
-                            '<div class="status error">Ошибка при проверке статуса</div>';
                     });
             }
             
@@ -443,21 +591,84 @@ if __name__ == '__main__':
                     } else {
                         let html = '<ul>';
                         data.scans.forEach(scan => {
-                            html += `<li><a href="/report/${scan.id}">${scan.target} - ${scan.status} (${scan.start_time})</a></li>`;
+                            const type = scan.type === 'arp_scan' ? '🔍 ARP' : '🎯 Single';
+                            html += `<li><a href="${scan.type === 'arp_scan' ? '/arp_report/' : '/report/'}${scan.id}">${type}: ${scan.target} - ${scan.status} (${scan.start_time})</a></li>`;
                         });
                         html += '</ul>';
                         listDiv.innerHTML = html;
                     }
-                })
-                .catch(error => {
-                    console.error('Error loading scan history:', error);
-                    document.getElementById('scanList').innerHTML = 
-                        '<p>Ошибка загрузки истории</p>';
                 });
         }
         
-        // Загружаем историю при старте
-        loadScanHistory();
+        // Инициализация при загрузке страницы
+        document.addEventListener('DOMContentLoaded', function() {
+            loadScanHistory();
+            loadArpHistoryFromStorage();
+        });
+    </script>
+</body>
+</html>''')
+        
+    with open('templates/arp_report.html', 'w') as f:
+        f.write('''<!DOCTYPE html>
+<html>
+<head>
+    <title>ARP Report - {{ scan.target }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .section { margin: 30px 0; padding: 20px; border: 1px solid #ddd; }
+        .host-list { margin: 15px 0; }
+        .host-item { 
+            padding: 10px; 
+            margin: 5px 0; 
+            background: #f9f9f9; 
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .scan-btn { 
+            padding: 5px 10px; 
+            background: #28a745; 
+            color: white; 
+            border: none; 
+            border-radius: 3px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 ARP Scan Report: {{ scan.target }}</h1>
+        <p><strong>Статус:</strong> {{ scan.status }}</p>
+        <p><strong>Время начала:</strong> {{ scan.start_time }}</p>
+        <p><strong>Время завершения:</strong> {{ scan.end_time }}</p>
+        <p><strong>Найдено хостов:</strong> {{ scan.results.hosts_found }}</p>
+        
+        <div class="section">
+            <h2>Найденные хосты</h2>
+            <div class="host-list">
+                {% for host in scan.results.hosts %}
+                <div class="host-item">
+                    📡 {{ host }}
+                    <button class="scan-btn" onclick="scanHost('{{ host }}')">Сканировать этот хост</button>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <a href="/">← Вернуться к сканеру</a>
+    </div>
+
+    <script>
+        function scanHost(ip) {
+            // Открываем новую вкладку с формой сканирования
+            window.open('/', '_blank');
+            // Можно также передать IP через URL параметры
+            setTimeout(() => {
+                localStorage.setItem('autoScanIP', ip);
+            }, 1000);
+        }
     </script>
 </body>
 </html>''')
