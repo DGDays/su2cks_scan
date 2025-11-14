@@ -3,8 +3,10 @@ import subprocess
 import json
 import threading
 import os
+import re
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify
+import xml.etree.ElementTree as ET
 
 app = Flask(__name__)
 
@@ -97,8 +99,6 @@ def run_gobuster(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt
 def parse_nmap_xml(xml_output):
     """Парсим XML вывод Nmap для извлечения информации о портах"""
     try:
-        import xml.etree.ElementTree as ET
-        
         root = ET.fromstring(xml_output)
         ports_info = []
         
@@ -128,24 +128,36 @@ def parse_nmap_xml(xml_output):
     except Exception as e:
         print(f"Ошибка парсинга Nmap XML: {e}")
         return []
-
-def scan_target(target):
-    """Основная функция сканирования"""
-    scan_id = f"{target}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
-    scan_data = {
-        'id': scan_id,
-        'target': target,
-        'status': 'running',
-        'start_time': datetime.now().isoformat(),
-        'results': {}
-    }
-    
-    # Сохраняем в глобальное хранилище
-    scan_results[scan_id] = scan_data
-    
+def run_arp_scan(network):
     try:
-        # Шаг 1: Nmap сканирование
+        # Запускаем nmap ARP ping scan
+        result = subprocess.run([
+            'nmap', '-sn', '-PR', network, '-oX', '-'
+        ], capture_output=True, text=True, timeout=120)
+        
+        if result.returncode != 0:
+            return []
+        
+        # Парсим XML и извлекаем IP адреса
+        ip_addresses = []
+        root = ET.fromstring(result.stdout)
+        
+        for host in root.findall('host'):
+            address_elem = host.find('address[@addrtype="ipv4"]')
+            if address_elem is not None:
+                ip = address_elem.get('addr')
+                if ip:
+                    ip_addresses.append(ip)
+    except:
+        ip_addresses = []
+
+    return ip_addresses
+
+def scan_target(target, scan_data):
+    """Основная функция сканирования для одиночной цели"""
+    try:
+        # Nmap сканирование
         nmap_result = run_nmap(target)
         if nmap_result['success']:
             scan_data['results']['nmap'] = {
@@ -153,7 +165,7 @@ def scan_target(target):
                 'parsed_ports': parse_nmap_xml(nmap_result['output'])
             }
             
-            # Шаг 2: Проверяем веб-порты и запускаем дополнительные инструменты
+            # Проверяем веб-порты и запускаем Nikto/Gobuster
             web_ports = []
             for port_info in scan_data['results']['nmap']['parsed_ports']:
                 if port_info['state'] == 'open':
@@ -161,25 +173,16 @@ def scan_target(target):
                     if port_num in [80, 443, 8080, 8443]:
                         web_ports.append(port_num)
             
-            # Для первого найденного веб-порта запускаем Nikto и Gobuster
             if web_ports:
                 first_web_port = web_ports[0]
-                
-                # Запускаем Nikto
-                nikto_result = run_nikto(target, first_web_port)
-                if nikto_result['success']:
-                    scan_data['results']['nikto'] = {
-                        'port': first_web_port,
-                        'output': nikto_result['output']
-                    }
-                
-                # Запускаем Gobuster
-                gobuster_result = run_gobuster(target, first_web_port)
-                if gobuster_result['success']:
-                    scan_data['results']['gobuster'] = {
-                        'port': first_web_port,
-                        'output': gobuster_result['output']
-                    }
+                scan_data['results']['nikto'] = {
+                    'port': first_web_port,
+                    'output': run_nikto(target, first_web_port)['output']
+                }
+                scan_data['results']['gobuster'] = {
+                    'port': first_web_port,
+                    'output': run_gobuster(target, first_web_port)['output']
+                }
         
         scan_data['status'] = 'completed'
         scan_data['end_time'] = datetime.now().isoformat()
@@ -203,23 +206,44 @@ def start_scan():
     if not target:
         return jsonify({'error': 'Target is required'}), 400
     
-    # Запускаем сканирование в отдельном потоке
-    thread = threading.Thread(target=scan_target, args=(target,))
-    thread.daemon = True
-    thread.start()
+    ip_mask_strict_pattern = r'^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$'
     
-    # Находим ID сканирования (последний добавленный для этого target)
-    scan_id = None
-    for sid, scan_data in scan_results.items():
-        if scan_data['target'] == target and scan_data['status'] == 'running':
-            scan_id = sid
-            break
-    
-    return jsonify({
-        'scan_id': scan_id,
-        'status': 'started',
-        'target': target
-    })
+    if bool(re.match(ip_mask_strict_pattern, target)):
+        # ARP сканирование сети
+        ips = run_arp_scan(target)
+        return jsonify({
+            'status': 'arp_completed',
+            'arp': True,
+            'network': target,
+            'hosts_found': len(ips),
+            'hosts': ips,
+            'message': f'Найдено {len(ips)} хостов в сети {target}'
+        })
+    else:
+        # Одиночное сканирование
+        scan_id = f"{target}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        scan_data = {
+            'id': scan_id,
+            'target': target,
+            'status': 'running',
+            'start_time': datetime.now().isoformat(),
+            'results': {}
+        }
+        
+        scan_results[scan_id] = scan_data
+        
+        # Запускаем сканирование в отдельном потоке
+        thread = threading.Thread(target=scan_target, args=(target, scan_data))
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            'scan_id': scan_id,
+            'status': 'started',
+            'arp': False,
+            'target': target
+        })
 
 @app.route('/api/scan/<scan_id>')
 def get_scan_status(scan_id):
@@ -266,6 +290,27 @@ if __name__ == '__main__':
         .running { background: #fff3cd; }
         .completed { background: #d1ecf1; }
         .error { background: #f8d7da; }
+        .arp-results { background: #e8f5e8; }
+        .host-list { margin: 15px 0; }
+        .host-item { 
+            padding: 8px; 
+            margin: 5px 0; 
+            background: white; 
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .scan-host-btn { 
+            padding: 5px 10px; 
+            background: #28a745; 
+            color: white; 
+            border: none; 
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .scan-host-btn:hover { background: #218838; }
     </style>
 </head>
 <body>
@@ -273,9 +318,11 @@ if __name__ == '__main__':
         <h1>Pentest Scanner</h1>
         
         <div class="form-group">
-            <input type="text" id="target" placeholder="Введите IP или домен (example.com)" />
+            <input type="text" id="target" placeholder="Введите IP, домен или сеть (192.168.1.0/24)" />
             <button onclick="startScan()">Начать сканирование</button>
         </div>
+        
+        <p><small>Примеры: example.com, 192.168.1.1, 192.168.1.0/24</small></p>
         
         <div id="results"></div>
         
@@ -295,10 +342,49 @@ if __name__ == '__main__':
             })
             .then(r => r.json())
             .then(data => {
-                if (data.scan_id) {
+                if (data.status === 'arp_completed') {
+                    showArpResults(data);
+                } else if (data.scan_id) {
                     checkStatus(data.scan_id);
                 }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('results').innerHTML = 
+                    '<div class="status error">Ошибка при запуске сканирования</div>';
             });
+        }
+        
+        function showArpResults(data) {
+            const resultsDiv = document.getElementById('results');
+            let html = `<div class="status arp-results">
+                <h3>🔍 ARP Сканирование завершено: ${data.network}</h3>
+                <p>${data.message}</p>`;
+            
+            if (data.hosts && data.hosts.length > 0) {
+                html += `<div class="host-list">
+                    <h4>Найденные хосты:</h4>`;
+                
+                data.hosts.forEach(ip => {
+                    html += `<div class="host-item">
+                        <span>📡 ${ip}</span>
+                        <button class="scan-host-btn" onclick="scanSingleHost('${ip}')">Сканировать этот IP</button>
+                    </div>`;
+                });
+                
+                html += `</div>`;
+            } else {
+                html += `<p>Хосты не найдены</p>`;
+            }
+            
+            html += `</div>`;
+            resultsDiv.innerHTML = html;
+        }
+        
+        function scanSingleHost(ip) {
+            // Заполняем поле ввода и запускаем сканирование
+            document.getElementById('target').value = ip;
+            startScan();
         }
         
         function checkStatus(scanId) {
@@ -329,10 +415,17 @@ if __name__ == '__main__':
                         } else if (scan.status === 'running') {
                             html += `<p>Сканирование выполняется... (обновление через 3 секунды)</p>`;
                             setTimeout(poll, 3000);
+                        } else if (scan.status === 'error') {
+                            html += `<p>Ошибка: ${scan.error || 'Неизвестная ошибка'}</p>`;
                         }
                         
                         html += `</div>`;
                         resultsDiv.innerHTML = html;
+                    })
+                    .catch(error => {
+                        console.error('Error polling status:', error);
+                        resultsDiv.innerHTML = 
+                            '<div class="status error">Ошибка при проверке статуса</div>';
                     });
             }
             
@@ -340,21 +433,31 @@ if __name__ == '__main__':
         }
         
         // Загружаем список сканирований
-        fetch('/api/scans')
-            .then(r => r.json())
-            .then(data => {
-                const listDiv = document.getElementById('scanList');
-                if (data.scans.length === 0) {
-                    listDiv.innerHTML = '<p>Нет завершенных сканирований</p>';
-                } else {
-                    let html = '<ul>';
-                    data.scans.forEach(scan => {
-                        html += `<li><a href="/report/${scan.id}">${scan.target} - ${scan.status} (${scan.start_time})</a></li>`;
-                    });
-                    html += '</ul>';
-                    listDiv.innerHTML = html;
-                }
-            });
+        function loadScanHistory() {
+            fetch('/api/scans')
+                .then(r => r.json())
+                .then(data => {
+                    const listDiv = document.getElementById('scanList');
+                    if (data.scans.length === 0) {
+                        listDiv.innerHTML = '<p>Нет завершенных сканирований</p>';
+                    } else {
+                        let html = '<ul>';
+                        data.scans.forEach(scan => {
+                            html += `<li><a href="/report/${scan.id}">${scan.target} - ${scan.status} (${scan.start_time})</a></li>`;
+                        });
+                        html += '</ul>';
+                        listDiv.innerHTML = html;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading scan history:', error);
+                    document.getElementById('scanList').innerHTML = 
+                        '<p>Ошибка загрузки истории</p>';
+                });
+        }
+        
+        // Загружаем историю при старте
+        loadScanHistory();
     </script>
 </body>
 </html>''')
@@ -417,4 +520,4 @@ if __name__ == '__main__':
 </html>''')
 
     print("Запуск Flask сервера на http://localhost:5000")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='127.0.0.1', port=5000, debug=True)
