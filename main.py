@@ -218,13 +218,16 @@ def run_gobuster_vhost(target, port=80, wordlist='/usr/share/wordlists/dirb/comm
     except Exception as e:
         return {'success': False, 'error': str(e)}
     
-def run_custom_scan_and_update(target, port, scan_type, wordlist, main_scan_id):
+def run_custom_scan_and_update(target, port, scan_type, wordlist=None, main_scan_id=None, commands=None):
     """Запускает кастомное сканирование и добавляет результаты в основное"""
     try:
         if scan_type == 'dir':
             result = run_gobuster(target, port, wordlist)
         elif scan_type == 'vhost':
             result = run_gobuster_vhost(target, port, wordlist)
+        elif scan_type == 'sqlmap':
+            # Для SQLMap передаем commands и target
+            result = run_sqlmap(target, commands)
         else:
             return
         
