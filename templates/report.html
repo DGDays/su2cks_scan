@@ -44,8 +44,15 @@
         
         {% if scan.results.gobuster %}
         <div class="section">
-            <h2>Gobuster Результаты (порт {{ scan.results.gobuster.port }})</h2>
+            <h2>Gobuster Dirs Результаты (порт {{ scan.results.gobuster.port }})</h2>
             <pre>{{ scan.results.gobuster.output }}</pre>
+        </div>
+        {% endif %}
+
+        {% if scan.results.gobuster_vhost %}
+        <div class="section">
+            <h2>Gobuster Domains Результаты (порт {{ scan.results.gobuster_vhost.port }})</h2>
+            <pre>{{ scan.results.gobuster_vhost.output }}</pre>
         </div>
         {% endif %}
         

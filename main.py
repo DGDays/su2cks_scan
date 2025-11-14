@@ -161,6 +161,40 @@ def run_gobuster(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt
         return {'success': False, 'error': 'Gobuster timeout'}
     except Exception as e:
         return {'success': False, 'error': str(e)}
+    
+def run_gobuster_vhost(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt'):
+    """Запуск Gobuster для поиска директорий"""
+    try:
+        print(f"[+] Запуск Gobuster для {target}:{port}")
+        url = f"http://{target}:{port}" if port != 443 else f"https://{target}"
+        
+        # УБИРАЕМ -o - и используем только capture_output
+        result = subprocess.run([
+            'gobuster', 'vhost', '-u', url, '-w', wordlist, '-q'
+        ], capture_output=True, text=True, timeout=300)
+        
+        if "no such file" in result.stderr.lower():
+            minimal_words = ["admin", "login", "uploads", "images", "panel"]
+            temp_wordlist = "/tmp/minimal_wordlist.txt"
+            with open(temp_wordlist, 'w') as f:
+                for word in minimal_words:
+                    f.write(word + '\n')
+            
+            result = subprocess.run([
+                'gobuster', 'vhost', '-u', url, '-w', temp_wordlist, '-q'
+            ], capture_output=True, text=True, timeout=300)
+            
+            os.unlink(temp_wordlist)
+        
+        return {
+            'success': True,
+            'output': result.stdout,
+            'error': result.stderr
+        }
+    except subprocess.TimeoutExpired:
+        return {'success': False, 'error': 'Gobuster timeout'}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
 
 def parse_nmap_xml(xml_output):
     """Парсим XML вывод Nmap для извлечения информации о портах"""
@@ -248,6 +282,10 @@ def scan_target(target, scan_data):
                 scan_data['results']['gobuster'] = {
                     'port': first_web_port,
                     'output': run_gobuster(target, first_web_port)['output']
+                }
+                scan_data['results']['gobuster_vhost'] = {
+                    'port': first_web_port,
+                    'output': run_gobuster_vhost(target, first_web_port)['output']
                 }
         
         scan_data['status'] = 'completed'
