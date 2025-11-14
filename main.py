@@ -518,9 +518,7 @@ if __name__ == '__main__':
         
         <!-- Постоянный блок для ARP результатов -->
         <div id="arpHistory" style="margin-top: 30px;"></div>
-    </div>
-                
-    <button onclick="saveDashboardPdf()" style="padding: 10px 15px; background: #28a745; color: white; border: none; cursor: pointer; margin: 10px 0;">
+                    <button onclick="saveDashboardPdf()" style="padding: 10px 15px; background: #28a745; color: white; border: none; cursor: pointer; margin: 10px 0;">
     📊 Сохранить дашборд в PDF
 </button>
 
@@ -550,6 +548,8 @@ function saveDashboardPdf() {
     });
 }
 </script>
+    </div>
+            
 
     <script>
         // Глобальная переменная для хранения ARP результатов
@@ -827,15 +827,11 @@ function saveDashboardPdf() {
                 {% endfor %}
             </div>
         </div>
-        
-        <a href="/">← Вернуться к сканеру</a>
-    </div>
-                
-    <div style="margin: 20px 0;">
-    <button onclick="saveAsPdf()" style="padding: 10px 15px; background: #dc3545; color: white; border: none; cursor: pointer;">
+                <button onclick="saveAsPdf()" style="padding: 10px 15px; background: #dc3545; color: white; border: none; cursor: pointer;">
         💾 Сохранить как PDF
     </button>
-</div>
+        
+        <a href="/">← Вернуться к сканеру</a>
 
 <script>
 function saveAsPdf() {
@@ -850,6 +846,8 @@ function saveAsPdf() {
     window.open(endpoint, '_blank');
 }
 </script>
+    </div>
+                
 
     <script>
         function scanHost(ip) {
@@ -917,8 +915,7 @@ function saveAsPdf() {
         {% endif %}
         
         <a href="/">Вернуться к сканеру</a>
-    </div>
-    <div style="margin: 20px 0;">
+                    <div style="margin: 20px 0;">
     <button onclick="saveAsPdf()" style="padding: 10px 15px; background: #dc3545; color: white; border: none; cursor: pointer;">
         💾 Сохранить как PDF
     </button>
@@ -937,6 +934,7 @@ function saveAsPdf() {
     window.open(endpoint, '_blank');
 }
 </script>
+    </div>
 
 </body>
 </html>''')
