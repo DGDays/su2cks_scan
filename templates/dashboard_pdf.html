@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; }
+        .scan-item { margin: 10px 0; padding: 10px; background: #f9f9f9; }
+        .arp-scan { background: #f0f8f0; }
+        .timestamp { color: #666; font-size: 10px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Pentest Scanner Dashboard</h1>
+        <p class="timestamp">Generated: {{ now }}</p>
+    </div>
+    
+    <div class="section">
+        <h2>Scan History</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Target</th>
+                    <th>Status</th>
+                    <th>Date</th>
+                    <th>Results</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for scan in scans %}
+                <tr>
+                    <td>{% if scan.type == 'arp_scan' %}ARP Scan{% else %}Single Scan{% endif %}</td>
+                    <td>{{ scan.target }}</td>
+                    <td>{{ scan.status }}</td>
+                    <td>{{ scan.start_time[:16] }}</td>
+                    <td>
+                        {% if scan.type == 'arp_scan' %}
+                            {{ scan.results.hosts_found }} hosts
+                        {% else %}
+                            {{ scan.results.nmap.parsed_ports|length }} ports
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    {% if arp_history %}
+    <div class="section">
+        <h2>Saved ARP Scans</h2>
+        {% for arp_scan in arp_history %}
+        <div class="scan-item arp-scan">
+            <h3>Network: {{ arp_scan.network }}</h3>
+            <p><strong>Hosts Found:</strong> {{ arp_scan.hosts_found }}</p>
+            <p><strong>Saved:</strong> {{ arp_scan.timestamp }}</p>
+            <div>
+                <strong>Hosts:</strong>
+                {% for host in arp_scan.hosts %}
+                <div>📡 {{ host }}</div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</body>
+</html>

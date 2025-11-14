@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Отчет сканирования - {{ scan.target }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .section { margin: 30px 0; padding: 20px; border: 1px solid #ddd; }
+        pre { background: #f5f5f5; padding: 15px; overflow: auto; }
+        .port { margin: 10px 0; padding: 10px; background: #f9f9f9; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Отчет сканирования: {{ scan.target }}</h1>
+        <p><strong>Статус:</strong> {{ scan.status }}</p>
+        <p><strong>Время начала:</strong> {{ scan.start_time }}</p>
+        {% if scan.end_time %}
+        <p><strong>Время завершения:</strong> {{ scan.end_time }}</p>
+        {% endif %}
+        
+        {% if scan.results.nmap %}
+        <div class="section">
+            <h2>Nmap Результаты</h2>
+            <h3>Открытые порты:</h3>
+            {% for port in scan.results.nmap.parsed_ports %}
+            <div class="port">
+                <strong>Порт {{ port.port }} ({{ port.service }})</strong> - {{ port.state }}<br>
+                Версия: {{ port.version }}
+            </div>
+            {% endfor %}
+            
+            <h3>Полный вывод Nmap:</h3>
+            <pre>{{ scan.results.nmap.raw_output }}</pre>
+        </div>
+        {% endif %}
+        
+        {% if scan.results.nikto %}
+        <div class="section">
+            <h2>Nikto Результаты (порт {{ scan.results.nikto.port }})</h2>
+            <pre>{{ scan.results.nikto.output }}</pre>
+        </div>
+        {% endif %}
+        
+        {% if scan.results.gobuster %}
+        <div class="section">
+            <h2>Gobuster Результаты (порт {{ scan.results.gobuster.port }})</h2>
+            <pre>{{ scan.results.gobuster.output }}</pre>
+        </div>
+        {% endif %}
+        
+        <a href="/">Вернуться к сканеру</a>
+    </div>
+    <div style="margin: 20px 0;">
+    <button onclick="saveAsPdf()" style="padding: 10px 15px; background: #dc3545; color: white; border: none; cursor: pointer;">
+        💾 Сохранить как PDF
+    </button>
+</div>
+
+<script>
+function saveAsPdf() {
+    // Получаем scan_id из URL
+    const path = window.location.pathname;
+    const scanId = path.split('/').pop();
+    
+    // Определяем тип отчета
+    const isArpReport = path.includes('arp_report');
+    const endpoint = isArpReport ? `/save_as_pdf/${scanId}` : `/save_as_pdf/${scanId}`;
+    
+    window.open(endpoint, '_blank');
+}
+</script>
+
+</body>
+</html>

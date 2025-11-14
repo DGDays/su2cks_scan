@@ -4,14 +4,86 @@ import json
 import threading
 import os
 import re
+import pdfkit
+import tempfile
+import platform
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, make_response
 import xml.etree.ElementTree as ET
 
 app = Flask(__name__)
 
 # Хранилище результатов сканирований
 scan_results = {}
+
+def find_wkhtmltopdf():
+    """Автоматически находит путь к wkhtmltopdf"""
+    # Список возможных путей для разных ОС
+    possible_paths = []
+    
+    system = platform.system().lower()
+    
+    if system == 'windows':
+        possible_paths = [
+            r'C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe',
+            r'C:\Program Files (x86)\wkhtmltopdf\bin\wkhtmltopdf.exe',
+            r'C:\wkhtmltopdf\bin\wkhtmltopdf.exe',
+            'wkhtmltopdf.exe'  # Если добавлен в PATH
+        ]
+    elif system == 'linux' or system == 'darwin':  # Linux или Mac
+        possible_paths = [
+            '/usr/bin/wkhtmltopdf',
+            '/usr/local/bin/wkhtmltopdf',
+            '/bin/wkhtmltopdf',
+            '/opt/bin/wkhtmltopdf',
+            'wkhtmltopdf'  # Если в PATH
+        ]
+    
+    # Проверяем каждый путь
+    for path in possible_paths:
+        if os.path.exists(path):
+            print(f"[+] Найден wkhtmltopdf: {path}")
+            return path
+    
+    # Пробуем найти через which/where
+    try:
+        if system == 'windows':
+            result = subprocess.run(['where', 'wkhtmltopdf'], 
+                                  capture_output=True, text=True)
+        else:
+            result = subprocess.run(['which', 'wkhtmltopdf'], 
+                                  capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            path = result.stdout.strip().split('\n')[0]
+            print(f"[+] Найден wkhtmltopdf через which/where: {path}")
+            return path
+    except:
+        pass
+    
+    # Если ничего не нашли
+    print("[-] Wkhtmltopdf не найден. Установите его:")
+    if system == 'windows':
+        print("Скачайте с: https://wkhtmltopdf.org/downloads.html")
+    else:
+        print("sudo apt-get install wkhtmltopdf  # Ubuntu/Debian")
+        print("brew install wkhtmltopdf          # MacOS")
+    
+    return None
+
+# Конфигурация pdfkit с автопоиском
+try:
+    wkhtmltopdf_path = find_wkhtmltopdf()
+    if wkhtmltopdf_path:
+        PDF_CONFIG = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_path)
+        print("[+] PDF_CONFIG успешно инициализирован")
+    else:
+        PDF_CONFIG = None
+        print("[-] Не удалось найти wkhtmltopdf, PDF экспорт недоступен")
+except Exception as e:
+    print(f"[-] Ошибка инициализации PDF_CONFIG: {e}")
+    PDF_CONFIG = None
+
 
 def run_nmap(target):
     """Запуск Nmap сканирования"""
@@ -62,16 +134,12 @@ def run_gobuster(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt
         print(f"[+] Запуск Gobuster для {target}:{port}")
         url = f"http://{target}:{port}" if port != 443 else f"https://{target}"
         
-        # Используем упрощенную версию если стандартная wordlist не доступна
+        # УБИРАЕМ -o - и используем только capture_output
         result = subprocess.run([
-            'gobuster', 'dir', '-u', url, '-w', wordlist,
-            '-o', '-',  # вывод в stdout
-            '-q'  # тихий режим
+            'gobuster', 'dir', '-u', url, '-w', wordlist, '-q'
         ], capture_output=True, text=True, timeout=300)
         
-        # Если wordlist не найдена, используем минимальный набор
         if "no such file" in result.stderr.lower():
-            # Создаем минимальную wordlist на лету
             minimal_words = ["admin", "login", "uploads", "images", "css", "js", "api"]
             temp_wordlist = "/tmp/minimal_wordlist.txt"
             with open(temp_wordlist, 'w') as f:
@@ -79,11 +147,9 @@ def run_gobuster(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt
                     f.write(word + '\n')
             
             result = subprocess.run([
-                'gobuster', 'dir', '-u', url, '-w', temp_wordlist,
-                '-o', '-', '-q'
+                'gobuster', 'dir', '-u', url, '-w', temp_wordlist, '-q'
             ], capture_output=True, text=True, timeout=300)
             
-            # Удаляем временный файл
             os.unlink(temp_wordlist)
         
         return {
@@ -300,6 +366,80 @@ def view_arp_report(scan_id):
     
     return render_template('arp_report.html', scan=scan_data)
 
+@app.route('/save_as_pdf/<scan_id>')
+def save_scan_as_pdf(scan_id):
+    """Сохранение отчета сканирования в PDF"""
+    if scan_id not in scan_results:
+        return "Scan not found", 404
+    
+    scan_data = scan_results[scan_id]
+    
+    # Рендерим HTML для PDF
+    if scan_data.get('type') == 'arp_scan':
+        html_content = render_template('arp_report_pdf.html', scan=scan_data)
+        filename = f"arp_scan_{scan_data['target']}.pdf"
+    else:
+        html_content = render_template('report_pdf.html', scan=scan_data)
+        filename = f"scan_{scan_data['target']}.pdf"
+    
+    # Конвертируем в PDF
+    try:
+        pdf = pdfkit.from_string(html_content, False, configuration=PDF_CONFIG)
+        
+        response = make_response(pdf)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename={filename}'
+        return response
+    except Exception as e:
+        return f"Error generating PDF: {str(e)}", 500
+
+@app.route('/save_dashboard_pdf')
+def save_dashboard_pdf():
+    """Сохранение главной страницы с историей в PDF"""
+    # Получаем все сканирования для отображения в PDF
+    all_scans = list(scan_results.values())
+    
+    # Загружаем ARP историю из localStorage (эмулируем)
+    arp_history = []
+    # В реальности нужно передавать через параметры или сессию
+    
+    html_content = render_template('dashboard_pdf.html', 
+                                 scans=all_scans,
+                                 arp_history=arp_history)
+    
+    try:
+        pdf = pdfkit.from_string(html_content, False, configuration=PDF_CONFIG)
+        
+        response = make_response(pdf)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = 'attachment; filename=pentest_dashboard.pdf'
+        return response
+    except Exception as e:
+        return f"Error generating PDF: {str(e)}", 500
+
+# Новый endpoint для сохранения с передачей ARP истории
+@app.route('/save_dashboard_with_arp', methods=['POST'])
+def save_dashboard_with_arp():
+    """Сохранение дашборда с переданной ARP историей"""
+    data = request.json
+    arp_history = data.get('arp_history', [])
+    
+    all_scans = list(scan_results.values())
+    
+    html_content = render_template('dashboard_pdf.html',
+                                 scans=all_scans,
+                                 arp_history=arp_history)
+    
+    try:
+        pdf = pdfkit.from_string(html_content, False, configuration=PDF_CONFIG)
+        
+        response = make_response(pdf)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = 'attachment; filename=pentest_dashboard.pdf'
+        return response
+    except Exception as e:
+        return f"Error generating PDF: {str(e)}", 500
+
 if __name__ == '__main__':
     # Создаем папку для шаблонов если её нет
     os.makedirs('templates', exist_ok=True)
@@ -379,6 +519,37 @@ if __name__ == '__main__':
         <!-- Постоянный блок для ARP результатов -->
         <div id="arpHistory" style="margin-top: 30px;"></div>
     </div>
+                
+    <button onclick="saveDashboardPdf()" style="padding: 10px 15px; background: #28a745; color: white; border: none; cursor: pointer; margin: 10px 0;">
+    📊 Сохранить дашборд в PDF
+</button>
+
+<script>
+function saveDashboardPdf() {
+    // Передаем ARP историю на сервер
+    fetch('/save_dashboard_with_arp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ arp_history: arpScans })
+    })
+    .then(response => response.blob())
+    .then(blob => {
+        // Скачиваем PDF
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'pentest_dashboard.pdf';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    })
+    .catch(error => {
+        console.error('Error saving dashboard:', error);
+        alert('Ошибка при сохранении PDF');
+    });
+}
+</script>
 
     <script>
         // Глобальная переменная для хранения ARP результатов
@@ -659,6 +830,26 @@ if __name__ == '__main__':
         
         <a href="/">← Вернуться к сканеру</a>
     </div>
+                
+    <div style="margin: 20px 0;">
+    <button onclick="saveAsPdf()" style="padding: 10px 15px; background: #dc3545; color: white; border: none; cursor: pointer;">
+        💾 Сохранить как PDF
+    </button>
+</div>
+
+<script>
+function saveAsPdf() {
+    // Получаем scan_id из URL
+    const path = window.location.pathname;
+    const scanId = path.split('/').pop();
+    
+    // Определяем тип отчета
+    const isArpReport = path.includes('arp_report');
+    const endpoint = isArpReport ? `/save_as_pdf/${scanId}` : `/save_as_pdf/${scanId}`;
+    
+    window.open(endpoint, '_blank');
+}
+</script>
 
     <script>
         function scanHost(ip) {
@@ -727,8 +918,202 @@ if __name__ == '__main__':
         
         <a href="/">Вернуться к сканеру</a>
     </div>
+    <div style="margin: 20px 0;">
+    <button onclick="saveAsPdf()" style="padding: 10px 15px; background: #dc3545; color: white; border: none; cursor: pointer;">
+        💾 Сохранить как PDF
+    </button>
+</div>
+
+<script>
+function saveAsPdf() {
+    // Получаем scan_id из URL
+    const path = window.location.pathname;
+    const scanId = path.split('/').pop();
+    
+    // Определяем тип отчета
+    const isArpReport = path.includes('arp_report');
+    const endpoint = isArpReport ? `/save_as_pdf/${scanId}` : `/save_as_pdf/${scanId}`;
+    
+    window.open(endpoint, '_blank');
+}
+</script>
+
 </body>
 </html>''')
+        
+    with open('templates/report_pdf.html', 'w') as f:
+        f.write('''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; }
+        .port { margin: 8px 0; padding: 8px; background: #f9f9f9; }
+        pre { background: #f5f5f5; padding: 10px; font-size: 10px; overflow: auto; }
+        .timestamp { color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Pentest Report: {{ scan.target }}</h1>
+        <p class="timestamp">Generated: {{ scan.end_time or scan.start_time }}</p>
+    </div>
+    
+    <div class="section">
+        <h2>Scan Information</h2>
+        <p><strong>Target:</strong> {{ scan.target }}</p>
+        <p><strong>Status:</strong> {{ scan.status }}</p>
+        <p><strong>Start Time:</strong> {{ scan.start_time }}</p>
+        {% if scan.end_time %}
+        <p><strong>End Time:</strong> {{ scan.end_time }}</p>
+        {% endif %}
+    </div>
+    
+    {% if scan.results.nmap %}
+    <div class="section">
+        <h2>Nmap Results</h2>
+        {% for port in scan.results.nmap.parsed_ports %}
+        <div class="port">
+            <strong>Port {{ port.port }}</strong> ({{ port.service }}) - {{ port.state }}<br>
+            Version: {{ port.version }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    
+    {% if scan.results.nikto %}
+    <div class="section">
+        <h2>Nikto Results</h2>
+        <pre>{{ scan.results.nikto.output }}</pre>
+    </div>
+    {% endif %}
+    
+    {% if scan.results.gobuster %}
+    <div class="section">
+        <h2>Gobuster Results</h2>
+        <pre>{{ scan.results.gobuster.output }}</pre>
+    </div>
+    {% endif %}
+</body>
+</html>
+''')
+    
+    with open('templates/arp_report_pdf.html', 'w') as f:
+        f.write('''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; }
+        .host-item { margin: 5px 0; padding: 8px; background: #f0f8f0; }
+        .timestamp { color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>ARP Scan Report: {{ scan.target }}</h1>
+        <p class="timestamp">Generated: {{ scan.end_time }}</p>
+    </div>
+    
+    <div class="section">
+        <h2>Scan Summary</h2>
+        <p><strong>Network:</strong> {{ scan.target }}</p>
+        <p><strong>Hosts Found:</strong> {{ scan.results.hosts_found }}</p>
+        <p><strong>Scan Date:</strong> {{ scan.start_time }}</p>
+    </div>
+    
+    <div class="section">
+        <h2>Discovered Hosts</h2>
+        {% for host in scan.results.hosts %}
+        <div class="host-item">
+            📡 {{ host }}
+        </div>
+        {% endfor %}
+    </div>
+</body>
+</html>
+''')
+        
+    with open('templates/dashboard_pdf.html', 'w') as f:
+        f.write('''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; }
+        .scan-item { margin: 10px 0; padding: 10px; background: #f9f9f9; }
+        .arp-scan { background: #f0f8f0; }
+        .timestamp { color: #666; font-size: 10px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Pentest Scanner Dashboard</h1>
+        <p class="timestamp">Generated: {{ now }}</p>
+    </div>
+    
+    <div class="section">
+        <h2>Scan History</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Target</th>
+                    <th>Status</th>
+                    <th>Date</th>
+                    <th>Results</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for scan in scans %}
+                <tr>
+                    <td>{% if scan.type == 'arp_scan' %}ARP Scan{% else %}Single Scan{% endif %}</td>
+                    <td>{{ scan.target }}</td>
+                    <td>{{ scan.status }}</td>
+                    <td>{{ scan.start_time[:16] }}</td>
+                    <td>
+                        {% if scan.type == 'arp_scan' %}
+                            {{ scan.results.hosts_found }} hosts
+                        {% else %}
+                            {{ scan.results.nmap.parsed_ports|length }} ports
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    {% if arp_history %}
+    <div class="section">
+        <h2>Saved ARP Scans</h2>
+        {% for arp_scan in arp_history %}
+        <div class="scan-item arp-scan">
+            <h3>Network: {{ arp_scan.network }}</h3>
+            <p><strong>Hosts Found:</strong> {{ arp_scan.hosts_found }}</p>
+            <p><strong>Saved:</strong> {{ arp_scan.timestamp }}</p>
+            <div>
+                <strong>Hosts:</strong>
+                {% for host in arp_scan.hosts %}
+                <div>📡 {{ host }}</div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</body>
+</html>
+''')
 
     print("Запуск Flask сервера на http://localhost:5000")
     app.run(host='127.0.0.1', port=5000, debug=True)

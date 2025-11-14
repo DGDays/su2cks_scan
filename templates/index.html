@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pentest Scanner</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .form-group { margin: 20px 0; }
+        input[type="text"] { padding: 10px; width: 300px; }
+        button { padding: 10px 20px; background: #007cba; color: white; border: none; cursor: pointer; }
+        button:hover { background: #005a87; }
+        .results { margin-top: 20px; padding: 20px; border: 1px solid #ddd; }
+        .status { padding: 10px; margin: 10px 0; }
+        .running { background: #fff3cd; }
+        .completed { background: #d1ecf1; }
+        .error { background: #f8d7da; }
+        .arp-results { background: #e8f5e8; border: 2px solid #28a745; }
+        .host-list { margin: 15px 0; }
+        .host-item { 
+            padding: 8px; 
+            margin: 5px 0; 
+            background: white; 
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .scan-host-btn { 
+            padding: 5px 10px; 
+            background: #28a745; 
+            color: white; 
+            border: none; 
+            border-radius: 3px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        .scan-host-btn:hover { background: #218838; }
+        .save-arp-btn { 
+            padding: 8px 15px; 
+            background: #6c757d; 
+            color: white; 
+            border: none; 
+            border-radius: 3px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        .save-arp-btn:hover { background: #545b62; }
+        .arp-permanent { 
+            background: #d4edda; 
+            border-left: 4px solid #28a745;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Pentest Scanner</h1>
+        
+        <div class="form-group">
+            <input type="text" id="target" placeholder="Введите IP, домен или сеть (192.168.1.0/24)" />
+            <button onclick="startScan()">Начать сканирование</button>
+        </div>
+        
+        <p><small>Примеры: example.com, 192.168.1.1, 192.168.1.0/24</small></p>
+        
+        <div id="results"></div>
+        
+        <h2>История сканирований</h2>
+        <div id="scanList"></div>
+        
+        <!-- Постоянный блок для ARP результатов -->
+        <div id="arpHistory" style="margin-top: 30px;"></div>
+    </div>
+                
+    <button onclick="saveDashboardPdf()" style="padding: 10px 15px; background: #28a745; color: white; border: none; cursor: pointer; margin: 10px 0;">
+    📊 Сохранить дашборд в PDF
+</button>
+
+<script>
+function saveDashboardPdf() {
+    // Передаем ARP историю на сервер
+    fetch('/save_dashboard_with_arp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ arp_history: arpScans })
+    })
+    .then(response => response.blob())
+    .then(blob => {
+        // Скачиваем PDF
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'pentest_dashboard.pdf';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    })
+    .catch(error => {
+        console.error('Error saving dashboard:', error);
+        alert('Ошибка при сохранении PDF');
+    });
+}
+</script>
+
+    <script>
+        // Глобальная переменная для хранения ARP результатов
+        let arpScans = [];
+        
+        function startScan() {
+            const target = document.getElementById('target').value;
+            if (!target) return alert('Введите target');
+            
+            fetch('/api/scan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target: target })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'arp_completed') {
+                    showArpResults(data);
+                    // Сохраняем в историю ARP сканирований
+                    saveArpToHistory(data);
+                } else if (data.scan_id) {
+                    checkStatus(data.scan_id);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('results').innerHTML = 
+                    '<div class="status error">Ошибка при запуске сканирования</div>';
+            });
+        }
+        
+        function showArpResults(data) {
+            const resultsDiv = document.getElementById('results');
+            let html = `<div class="status arp-results">
+                <h3>🔍 ARP Сканирование завершено: ${data.network}</h3>
+                <p>${data.message}</p>
+                <button class="save-arp-btn" onclick="saveArpToHistory(${JSON.stringify(data).replace(/"/g, '&quot;')})">
+                    💾 Сохранить это ARP сканирование
+                </button>`;
+            
+            if (data.hosts && data.hosts.length > 0) {
+                html += `<div class="host-list">
+                    <h4>Найденные хосты:</h4>`;
+                
+                data.hosts.forEach(ip => {
+                    html += `<div class="host-item">
+                        <span>📡 ${ip}</span>
+                        <div>
+                            <button class="scan-host-btn" onclick="scanSingleHost('${ip}')">Сканировать</button>
+                        </div>
+                    </div>`;
+                });
+                
+                html += `</div>`;
+            } else {
+                html += `<p>Хосты не найдены</p>`;
+            }
+            
+            html += `</div>`;
+            resultsDiv.innerHTML = html;
+        }
+        
+        function saveArpToHistory(arpData) {
+            // Добавляем timestamp для уникальности
+            arpData.timestamp = new Date().toISOString();
+            arpData.saved = true;
+            
+            // Добавляем в массив ARP сканирований
+            arpScans.unshift(arpData);
+            
+            // Сохраняем в localStorage
+            localStorage.setItem('arpScansHistory', JSON.stringify(arpScans));
+            
+            // Обновляем отображение истории ARP
+            renderArpHistory();
+            
+            // Показываем сообщение
+            showNotification('ARP сканирование сохранено в истории!');
+        }
+        
+        function renderArpHistory() {
+            const arpHistoryDiv = document.getElementById('arpHistory');
+            
+            if (arpScans.length === 0) {
+                arpHistoryDiv.innerHTML = '';
+                return;
+            }
+            
+            let html = `<h2>💾 Сохраненные ARP сканирования</h2>`;
+            
+            arpScans.forEach((scan, index) => {
+                html += `<div class="status arp-permanent">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <h4>🔍 ${scan.network} (${scan.hosts_found} хостов)</h4>
+                        <div>
+                            <button class="scan-host-btn" onclick="loadArpScan(${index})">Показать</button>
+                            <button class="scan-host-btn" style="background: #dc3545;" onclick="removeArpScan(${index})">Удалить</button>
+                        </div>
+                    </div>
+                    <p>Сохранено: ${new Date(scan.timestamp).toLocaleString()}</p>
+                </div>`;
+            });
+            
+            arpHistoryDiv.innerHTML = html;
+        }
+        
+        function loadArpScan(index) {
+            const scan = arpScans[index];
+            const resultsDiv = document.getElementById('results');
+            
+            let html = `<div class="status arp-results">
+                <h3>🔍 Сохраненное ARP сканирование: ${scan.network}</h3>
+                <p>${scan.message} (сохранено: ${new Date(scan.timestamp).toLocaleString()})</p>
+                <p><a href="/arp_report/${scan.scan_id}" target="_blank">📄 Открыть полный отчет</a></p>`;
+            
+            if (scan.hosts && scan.hosts.length > 0) {
+                html += `<div class="host-list">
+                    <h4>Найденные хосты:</h4>`;
+                
+                scan.hosts.forEach(ip => {
+                    html += `<div class="host-item">
+                        <span>📡 ${ip}</span>
+                        <button class="scan-host-btn" onclick="scanSingleHost('${ip}')">Сканировать</button>
+                    </div>`;
+                });
+                
+                html += `</div>`;
+            }
+            
+            html += `</div>`;
+            resultsDiv.innerHTML = html;
+            
+            // Прокручиваем к результатам
+            resultsDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        function removeArpScan(index) {
+            if (confirm('Удалить это ARP сканирование из истории?')) {
+                arpScans.splice(index, 1);
+                localStorage.setItem('arpScansHistory', JSON.stringify(arpScans));
+                renderArpHistory();
+                showNotification('ARP сканирование удалено из истории');
+            }
+        }
+        
+        function scanSingleHost(ip) {
+            document.getElementById('target').value = ip;
+            startScan();
+        }
+        
+        function showNotification(message) {
+            // Простое уведомление
+            alert(message);
+        }
+        
+        // Загружаем историю ARP из localStorage при загрузке страницы
+        function loadArpHistoryFromStorage() {
+            const saved = localStorage.getItem('arpScansHistory');
+            if (saved) {
+                arpScans = JSON.parse(saved);
+                renderArpHistory();
+            }
+        }
+        
+        function checkStatus(scanId) {
+            const resultsDiv = document.getElementById('results');
+            
+            function poll() {
+                fetch('/api/scan/' + scanId)
+                    .then(r => r.json())
+                    .then(scan => {
+                        let html = `<div class="status ${scan.status}">
+                            <h3>Сканирование: ${scan.target}</h3>
+                            <p>Статус: ${scan.status}</p>
+                            <p>Время начала: ${scan.start_time}</p>`;
+                        
+                        if (scan.status === 'completed') {
+                            html += `<p>Время завершения: ${scan.end_time}</p>`;
+                            html += `<p><a href="/report/${scanId}" target="_blank">Посмотреть полный отчет</a></p>`;
+                            
+                            if (scan.results.nmap) {
+                                html += `<h4>Nmap результаты:</h4>`;
+                                html += `<pre>${JSON.stringify(scan.results.nmap.parsed_ports, null, 2)}</pre>`;
+                            }
+                            if (scan.results.nikto) {
+                                html += `<h4>Nikto результаты:</h4>`;
+                                html += `<pre>${scan.results.nikto.output.substring(0, 500)}...</pre>`;
+                            }
+                        } else if (scan.status === 'running') {
+                            html += `<p>Сканирование выполняется... (обновление через 3 секунды)</p>`;
+                            setTimeout(poll, 3000);
+                        }
+                        
+                        html += `</div>`;
+                        resultsDiv.innerHTML = html;
+                    });
+            }
+            
+            poll();
+        }
+        
+        // Загружаем список сканирований
+        function loadScanHistory() {
+            fetch('/api/scans')
+                .then(r => r.json())
+                .then(data => {
+                    const listDiv = document.getElementById('scanList');
+                    if (data.scans.length === 0) {
+                        listDiv.innerHTML = '<p>Нет завершенных сканирований</p>';
+                    } else {
+                        let html = '<ul>';
+                        data.scans.forEach(scan => {
+                            const type = scan.type === 'arp_scan' ? '🔍 ARP' : '🎯 Single';
+                            html += `<li><a href="${scan.type === 'arp_scan' ? '/arp_report/' : '/report/'}${scan.id}">${type}: ${scan.target} - ${scan.status} (${scan.start_time})</a></li>`;
+                        });
+                        html += '</ul>';
+                        listDiv.innerHTML = html;
+                    }
+                });
+        }
+        
+        // Инициализация при загрузке страницы
+        document.addEventListener('DOMContentLoaded', function() {
+            loadScanHistory();
+            loadArpHistoryFromStorage();
+        });
+    </script>
+</body>
+</html>

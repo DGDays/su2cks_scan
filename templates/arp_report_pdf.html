@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; }
+        .host-item { margin: 5px 0; padding: 8px; background: #f0f8f0; }
+        .timestamp { color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>ARP Scan Report: {{ scan.target }}</h1>
+        <p class="timestamp">Generated: {{ scan.end_time }}</p>
+    </div>
+    
+    <div class="section">
+        <h2>Scan Summary</h2>
+        <p><strong>Network:</strong> {{ scan.target }}</p>
+        <p><strong>Hosts Found:</strong> {{ scan.results.hosts_found }}</p>
+        <p><strong>Scan Date:</strong> {{ scan.start_time }}</p>
+    </div>
+    
+    <div class="section">
+        <h2>Discovered Hosts</h2>
+        {% for host in scan.results.hosts %}
+        <div class="host-item">
+            📡 {{ host }}
+        </div>
+        {% endfor %}
+    </div>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ARP Report - {{ scan.target }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .section { margin: 30px 0; padding: 20px; border: 1px solid #ddd; }
+        .host-list { margin: 15px 0; }
+        .host-item { 
+            padding: 10px; 
+            margin: 5px 0; 
+            background: #f9f9f9; 
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .scan-btn { 
+            padding: 5px 10px; 
+            background: #28a745; 
+            color: white; 
+            border: none; 
+            border-radius: 3px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 ARP Scan Report: {{ scan.target }}</h1>
+        <p><strong>Статус:</strong> {{ scan.status }}</p>
+        <p><strong>Время начала:</strong> {{ scan.start_time }}</p>
+        <p><strong>Время завершения:</strong> {{ scan.end_time }}</p>
+        <p><strong>Найдено хостов:</strong> {{ scan.results.hosts_found }}</p>
+        
+        <div class="section">
+            <h2>Найденные хосты</h2>
+            <div class="host-list">
+                {% for host in scan.results.hosts %}
+                <div class="host-item">
+                    📡 {{ host }}
+                    <button class="scan-btn" onclick="scanHost('{{ host }}')">Сканировать этот хост</button>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <a href="/">← Вернуться к сканеру</a>
+    </div>
+                
+    <div style="margin: 20px 0;">
+    <button onclick="saveAsPdf()" style="padding: 10px 15px; background: #dc3545; color: white; border: none; cursor: pointer;">
+        💾 Сохранить как PDF
+    </button>
+</div>
+
+<script>
+function saveAsPdf() {
+    // Получаем scan_id из URL
+    const path = window.location.pathname;
+    const scanId = path.split('/').pop();
+    
+    // Определяем тип отчета
+    const isArpReport = path.includes('arp_report');
+    const endpoint = isArpReport ? `/save_as_pdf/${scanId}` : `/save_as_pdf/${scanId}`;
+    
+    window.open(endpoint, '_blank');
+}
+</script>
+
+    <script>
+        function scanHost(ip) {
+            // Открываем новую вкладку с формой сканирования
+            window.open('/', '_blank');
+            // Можно также передать IP через URL параметры
+            setTimeout(() => {
+                localStorage.setItem('autoScanIP', ip);
+            }, 1000);
+        }
+    </script>
+</body>
+</html>
