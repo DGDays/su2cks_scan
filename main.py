@@ -7,6 +7,7 @@ import re
 import pdfkit
 import tempfile
 import platform
+import uuid
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, make_response
 import xml.etree.ElementTree as ET
@@ -15,6 +16,8 @@ app = Flask(__name__)
 
 # Хранилище результатов сканирований
 scan_results = {}
+UPLOAD_FOLDER = '/tmp/pentest_scanner_wordlists'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def find_wkhtmltopdf():
     """Автоматически находит путь к wkhtmltopdf"""
@@ -132,6 +135,7 @@ def run_gobuster(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt
     """Запуск Gobuster для поиска директорий"""
     try:
         print(f"[+] Запуск Gobuster для {target}:{port}")
+        print(f"[+] Используется словарь: {wordlist}")
         url = f"http://{target}:{port}" if port != 443 else f"https://{target}"
         
         # УБИРАЕМ -o - и используем только capture_output
@@ -140,6 +144,7 @@ def run_gobuster(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt
         ], capture_output=True, text=True, timeout=300)
         
         if "no such file" in result.stderr.lower():
+            print(f"[-] Словарь {wordlist} не найден, используем минимальный словарь")
             minimal_words = ["admin", "login", "uploads", "images", "css", "js", "api"]
             temp_wordlist = "/tmp/minimal_wordlist.txt"
             with open(temp_wordlist, 'w') as f:
@@ -152,14 +157,19 @@ def run_gobuster(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt
             
             os.unlink(temp_wordlist)
         
+        print(f"[+] Gobuster завершен для {target}:{port}")
+        print(f"[+] Вывод: {len(result.stdout)} символов, ошибки: {len(result.stderr)} символов")
+        
         return {
             'success': True,
             'output': result.stdout,
             'error': result.stderr
         }
     except subprocess.TimeoutExpired:
+        print(f"[-] Таймаут Gobuster для {target}:{port}")
         return {'success': False, 'error': 'Gobuster timeout'}
     except Exception as e:
+        print(f"[-] Ошибка Gobuster для {target}:{port}: {e}")
         return {'success': False, 'error': str(e)}
     
 def run_gobuster_vhost(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt'):
@@ -195,6 +205,38 @@ def run_gobuster_vhost(target, port=80, wordlist='/usr/share/wordlists/dirb/comm
         return {'success': False, 'error': 'Gobuster timeout'}
     except Exception as e:
         return {'success': False, 'error': str(e)}
+    
+def run_custom_scan_and_update(target, port, scan_type, wordlist, main_scan_id):
+    """Запускает кастомное сканирование и добавляет результаты в основное"""
+    try:
+        if scan_type == 'dir':
+            result = run_gobuster(target, port, wordlist)
+        elif scan_type == 'vhost':
+            result = run_gobuster_vhost(target, port, wordlist)
+        else:
+            return
+        
+        # Добавляем результаты в основное сканирование
+        if main_scan_id in scan_results:
+            main_scan = scan_results[main_scan_id]
+            
+            # Создаем ключ для дополнительного сканирования
+            custom_key = f"custom_{scan_type}_{datetime.now().strftime('%H%M%S')}"
+            
+            if 'custom_scans' not in main_scan['results']:
+                main_scan['results']['custom_scans'] = {}
+            
+            main_scan['results']['custom_scans'][custom_key] = {
+                'scan_type': scan_type,
+                'wordlist_used': wordlist or 'default',
+                'port': port,
+                'output': result.get('output', ''),
+                'timestamp': datetime.now().isoformat(),
+                'success': result.get('success', False)
+            }
+            
+    except Exception as e:
+        print(f"Error in custom scan: {e}")
 
 def parse_nmap_xml(xml_output):
     """Парсим XML вывод Nmap для извлечения информации о портах"""
@@ -296,10 +338,35 @@ def scan_target(target, scan_data):
         scan_data['error'] = str(e)
         scan_data['end_time'] = datetime.now().isoformat()
 
+
 @app.route('/')
 def index():
     """Главная страница"""
     return render_template('index.html')
+
+@app.route('/api/upload_wordlist', methods=['POST'])
+def upload_wordlist():
+    """Загружает wordlist на сервер"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if file and (file.filename.endswith('.txt') or file.filename.endswith('.lst')):
+        # Сохраняем файл с уникальным именем
+        filename = f"{uuid.uuid4().hex}_{file.filename}"
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        file.save(filepath)
+        
+        return jsonify({
+            'success': True,
+            'filepath': filepath,
+            'filename': file.filename
+        })
+    else:
+        return jsonify({'error': 'Invalid file type. Only .txt and .lst allowed'}), 400
 
 @app.route('/api/scan', methods=['POST'])
 def start_scan():
@@ -477,6 +544,33 @@ def save_dashboard_with_arp():
         return response
     except Exception as e:
         return f"Error generating PDF: {str(e)}", 500
+    
+@app.route('/api/custom_scan', methods=['POST'])
+def custom_scan():
+    """Endpoint для кастомного сканирования"""
+    data = request.json
+    target = data.get('target', '')
+    scan_type = data.get('scan_type', 'dir')
+    custom_wordlist = data.get('wordlist', '')
+    port = data.get('port', 80)
+    main_scan_id = data.get('main_scan_id', '')
+    
+    if not target or not main_scan_id:
+        return jsonify({'error': 'Target and main_scan_id are required'}), 400
+    
+    if main_scan_id not in scan_results:
+        return jsonify({'error': 'Main scan not found'}), 404
+    
+    # Запускаем в отдельном потоке
+    thread = threading.Thread(target=run_custom_scan_and_update, 
+                             args=(target, port, scan_type, custom_wordlist, main_scan_id))
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({
+        'status': 'started',
+        'message': 'Дополнительное сканирование запущено'
+    })
 
 if __name__ == '__main__':
     print("Запуск Flask сервера на http://localhost:5000")
