@@ -59,5 +59,55 @@
         <pre>{{ scan.results.gobuster_vhost.output }}</pre>
     </div>
     {% endif %}
+    <!-- Дополнительные сканирования -->
+    {% if scan.results.custom_scans %}
+    <div class="section">
+        <h2>Additional Scans</h2>
+        {% for key, custom_scan in scan.results.custom_scans.items() %}
+        <div class="custom-scan">
+            <h4>
+                {% if custom_scan.scan_type == 'dir' %}Directory Search
+                {% elif custom_scan.scan_type == 'vhost' %}Vhost Search
+                {% elif custom_scan.scan_type == 'sqlmap' %}SQL Injection Test
+                {% else %}{{ custom_scan.scan_type }}{% endif %}
+                ({{ custom_scan.timestamp[:19] }})
+            </h4>
+            
+            {% if custom_scan.scan_type == 'dir' or custom_scan.scan_type == 'vhost' %}
+            <p><strong>Wordlist:</strong> {{ custom_scan.wordlist_used }}</p>
+            <p><strong>Port:</strong> {{ custom_scan.port }}</p>
+            {% elif custom_scan.scan_type == 'sqlmap' %}
+            <p><strong>Commands:</strong> <code>sqlmap {{ custom_scan.commands }}</code></p>
+            <p><strong>Status:</strong> {% if custom_scan.success %}✅ Success{% else %}❌ Failed{% endif %}</p>
+            {% endif %}
+            
+            <div style="margin-top: 10px;">
+                <strong>Results:</strong>
+                <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; max-height: 300px; overflow-y: auto;">{{ custom_scan.output or 'No results' }}</pre>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Старые SQLMap результаты (для обратной совместимости) -->
+    {% if scan.results.sqlmap %}
+    <div class="section">
+        <h2>SQLMap Results</h2>
+        <p><strong>Command:</strong> <code>sqlmap {{ scan.results.sqlmap.commands }}</code></p>
+        <p><strong>Status:</strong> {% if scan.results.sqlmap.success %}✅ Success{% else %}❌ Failed{% endif %}</p>
+        <p><strong>Return Code:</strong> {{ scan.results.sqlmap.returncode }}</p>
+        
+        {% if scan.results.sqlmap.output %}
+        <h4>SQLMap Output:</h4>
+        <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; max-height: 400px;">{{ scan.results.sqlmap.output }}</pre>
+        {% endif %}
+        
+        {% if scan.results.sqlmap.error %}
+        <h4>Errors:</h4>
+        <pre style="background: #fff5f5; padding: 10px; border-radius: 3px; max-height: 200px;">{{ scan.results.sqlmap.error }}</pre>
+        {% endif %}
+    </div>
+    {% endif %}
 </body>
 </html>
