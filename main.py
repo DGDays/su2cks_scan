@@ -499,7 +499,17 @@ def search_exploits(target=None, nmap_xml=None, query=None, options=None):
             'error': result.stderr,
             'returncode': result.returncode
         }
-        
+        out = []
+        print("\n\n")
+        for i in response.get("output").split("\n\n\n"):
+            res_exp = json.loads(i)["RESULTS_EXPLOIT"]
+            for j in res_exp:
+                print(j["Title"],"\n",j["EDB-ID"],"\n",j["Codes"])
+                out.append(j["Title"]+"\n"+j["EDB-ID"]+"\n"+j["Codes"])
+        out = '\n'.join(out)
+        response['output'] = out
+        print("\n\n")
+        print(os.system(f"cat {xml_filename}"))
         # Очистка временного файла
         if 'xml_filename' in locals() and os.path.exists(xml_filename):
             os.unlink(xml_filename)
