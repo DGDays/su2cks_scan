@@ -2,7 +2,7 @@
 import subprocess
 import json
 import threading
-import os
+import os, sys
 import re
 import pdfkit
 import tempfile
@@ -14,6 +14,9 @@ from datetime import datetime
 from collections import deque
 from flask import Flask, render_template, request, jsonify, make_response
 import xml.etree.ElementTree as ET
+# Добавляем путь к папке fstec_vul_db
+sys.path.append(os.path.join(os.path.dirname(__file__), 'fstec_vul_db'))
+from core import VulnerabilityDB
   
 '''
 │╲   ____╲│╲  ╲│╲  ╲  ╱  ___  ╲│╲   ____╲│╲  ╲│╲  ╲ │╲   ____╲         │╲   ____╲│╲   ____╲│╲   __  ╲│╲   ___  ╲    
@@ -26,7 +29,6 @@ import xml.etree.ElementTree as ET
    '''
 
 app = Flask(__name__)
-
 # Хранилище результатов сканирований
 scan_results = {}
 UPLOAD_FOLDER = '/tmp/pentest_scanner_wordlists'
@@ -39,10 +41,51 @@ cve_analysis_queue = deque()
 cve_analysis_active = False
 nvd_request_times = deque()
 
+def init_fstec_db():
+    """Инициализация БД ФСТЭК"""
+    try:
+        db = VulnerabilityDB()
+        print("[✅] БД ФСТЭК инициализирована")
+        return db
+    except Exception as e:
+        print(f"[-] Ошибка инициализации БД ФСТЭК: {e}")
+        return None
+
+# Использование в твоих функциях
+def search_fstec_vulnerabilities(service_name: str, service_version: str):
+    """
+    Поиск уязвимостей в БД ФСТЭК для сервиса
+    """
+    try:
+        db = init_fstec_db()
+        if not db:
+            return []
+        
+        # Маппинг названий сервисов
+        service_map = {
+            'ftp': 'vsftpd',
+            'http': 'Apache HTTP Server',
+            'https': 'Apache HTTP Server', 
+            'ssh': 'OpenSSH',
+            'mysql': 'MySQL',
+            'postgresql': 'PostgreSQL',
+            'smb': 'Samba',
+            'microsoft-ds': 'Windows',
+            'netbios-ssn': 'Samba'
+        }
+        
+        search_name = service_map.get(service_name.lower(), service_name)
+        
+        print(f"[+] Поиск в БД ФСТЭК: {search_name} {service_version}")
+        vulnerabilities = db.find_vulnerabilities(search_name, service_version)
+        
+        return vulnerabilities
+        
+    except Exception as e:
+        print(f"[-] Ошибка поиска в БД ФСТЭК: {e}")
+        return []
+
 def start_cve_analysis_async(scan_data, nmap_output):
-    """
-    Запускает CVE анализ в отдельном потоке с ограничением запросов
-    """
     global cve_analysis_active
     
     if cve_analysis_active:
@@ -58,32 +101,31 @@ def start_cve_analysis_async(scan_data, nmap_output):
         try:
             print("[🚀] Запуск асинхронного CVE анализа в фоновом режиме...")
             
-            # Парсим сервисы для анализа
             services = parse_nmap_for_cve_services(nmap_output)
             if not services:
                 print("[-] Нет сервисов для CVE анализа")
                 return
             
-            # Ограничиваем количество анализируемых сервисов
-            services_to_analyze = services[:3]  # Только первые 3 сервиса
+            services_to_analyze = services[:3]
             
-            vulnerabilities = []
+            nvd_vulnerabilities = []  # ⭐ ОТДЕЛЬНО ДЛЯ NVD
+            fstec_vulnerabilities = []  # ⭐ ОТДЕЛЬНО ДЛЯ ФСТЭК
             
             for i, service in enumerate(services_to_analyze):
                 print(f"[{i+1}/{len(services_to_analyze)}] Анализ CVE для: {service['name']} {service['version']}")
                 
-                # Делаем паузу между запросами (25 секунд)
+                # Делаем паузу между запросами
                 if i > 0:
                     wait_time = 25
                     print(f"[⏳] Пауза {wait_time} секунд перед следующим запросом...")
                     time.sleep(wait_time)
                 
-                # Ищем CVE для сервиса
+                # Ищем CVE для сервиса (NVD)
                 cve_list = search_cve_for_service_safe(service['name'], service['version'])
                 
                 if cve_list:
                     for cve in cve_list:
-                        vulnerabilities.append({
+                        nvd_vulnerabilities.append({
                             'service': service['name'],
                             'version': service['version'],
                             'port': service['port'],
@@ -92,29 +134,47 @@ def start_cve_analysis_async(scan_data, nmap_output):
                             'cvss_score': cve.get('cvss_score', 'N/A'),
                             'severity': cve.get('severity', 'N/A')
                         })
+                
+                # Ищем в БД ФСТЭК
+                print(f"[{i+1}/{len(services_to_analyze)}] Поиск в БД ФСТЭК для: {service['name']} {service['version']}")
+                fstec_vulns = search_fstec_vulnerabilities(service['name'], service['version'])
+                
+                if fstec_vulns:
+                    for fstec_vuln in fstec_vulns:
+                        fstec_vulnerabilities.append({
+                            'service': service['name'],
+                            'version': service['version'],
+                            'port': service['port'],
+                            'vuln_id': fstec_vuln.get('identifier', 'N/A'),
+                            'name': fstec_vuln.get('name', 'N/A'),
+                            'description': fstec_vuln.get('description', 'N/A'),
+                            'severity': fstec_vuln.get('severity', 'N/A'),
+                            'publication_date': fstec_vuln.get('publication_date', 'N/A'),
+                            'solution': fstec_vuln.get('solution', 'N/A')
+                        })
             
-            # Сохраняем результаты в scan_data
-            if vulnerabilities:
-                scan_data['results']['cve_analysis'] = {
-                    'vulnerabilities': vulnerabilities,
-                    'total_found': len(vulnerabilities),
-                    'scan_time': datetime.now().isoformat()
-                }
-                print(f"[✅] CVE анализ завершен: найдено {len(vulnerabilities)} уязвимостей")
-            else:
-                print("[ℹ️] CVE анализ завершен: уязвимости не найдены")
+            # Сохраняем результаты ОТДЕЛЬНО
+            scan_data['results']['vulnerability_analysis'] = {
+                'nvd_vulnerabilities': nvd_vulnerabilities,
+                'fstec_vulnerabilities': fstec_vulnerabilities,
+                'nvd_total': len(nvd_vulnerabilities),
+                'fstec_total': len(fstec_vulnerabilities),
+                'total_found': len(nvd_vulnerabilities) + len(fstec_vulnerabilities),
+                'scan_time': datetime.now().isoformat()
+            }
+            
+            print(f"[✅] Анализ уязвимостей завершен: "
+                  f"NVD: {len(nvd_vulnerabilities)}, ФСТЭК: {len(fstec_vulnerabilities)}")
             
         except Exception as e:
-            print(f"[-] Ошибка асинхронного CVE анализа: {e}")
+            print(f"[-] Ошибка асинхронного анализа уязвимостей: {e}")
         finally:
             cve_analysis_active = False
             
-            # Обрабатываем следующее сканирование в очереди
             if cve_analysis_queue:
                 next_scan_data, next_nmap_output = cve_analysis_queue.popleft()
                 start_cve_analysis_async(next_scan_data, next_nmap_output)
     
-    # Запускаем в отдельном потоке
     thread = threading.Thread(target=async_cve_analysis)
     thread.daemon = True
     thread.start()

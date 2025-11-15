@@ -35,20 +35,20 @@
         </div>
         {% endif %}
 
-        {% if scan.results.cve_analysis %}
+        <!-- NVD CVE Vulnerabilities -->
+        {% if scan.results.vulnerability_analysis and scan.results.vulnerability_analysis.nvd_vulnerabilities %}
         <div class="section">
-            <h2>🔍 Анализ уязвимостей CVE</h2>
-            <p><strong>Найдено уязвимостей:</strong> {{ scan.results.cve_analysis.total_found }}</p>
-            <p><strong>Время анализа:</strong> {{ scan.results.cve_analysis.scan_time[:19] }}</p>
+            <h2>🔍 CVE Vulnerabilities (NVD)</h2>
+            <p><strong>Total Found:</strong> {{ scan.results.vulnerability_analysis.nvd_total }}</p>
             
-            {% for vuln in scan.results.cve_analysis.vulnerabilities %}
+            {% for vuln in scan.results.vulnerability_analysis.nvd_vulnerabilities %}
             <div style="margin: 15px 0; padding: 15px; border: 2px solid 
                 {% if vuln.severity == 'CRITICAL' %}#dc3545
                 {% elif vuln.severity == 'HIGH' %}#fd7e14
                 {% elif vuln.severity == 'MEDIUM' %}#ffc107
                 {% else %}#28a745{% endif %}; 
                 border-radius: 5px; background: #f8f9fa;">
-                <h4>
+                <h4 style="margin: 0 0 10px 0;">
                     {{ vuln.cve_id }} 
                     <span style="color: 
                         {% if vuln.severity == 'CRITICAL' %}#dc3545
@@ -64,14 +64,40 @@
                     </span>
                     {% endif %}
                 </h4>
-                <p><strong>Сервис:</strong> {{ vuln.service }} {{ vuln.version }} (порт {{ vuln.port }})</p>
-                <p><strong>Описание:</strong> {{ vuln.description }}</p>
-                <p style="margin-top: 10px;">
+                <p style="margin: 5px 0;"><strong>Service:</strong> {{ vuln.service }} {{ vuln.version }} (port {{ vuln.port }})</p>
+                <p style="margin: 5px 0;"><strong>Description:</strong> {{ vuln.description }}</p>
+                <p style="margin: 10px 0 0 0;">
                     <a href="https://nvd.nist.gov/vuln/detail/{{ vuln.cve_id }}" target="_blank" 
                     style="color: #007bff; text-decoration: none;">
-                        🔗 Подробнее на NVD
+                        🔗 View details on NVD
                     </a>
                 </p>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- FSTEC Vulnerabilities -->
+        {% if scan.results.vulnerability_analysis and scan.results.vulnerability_analysis.fstec_vulnerabilities %}
+        <div class="section">
+            <h2>🇷🇺 FSTEC Vulnerabilities</h2>
+            <p><strong>Total Found:</strong> {{ scan.results.vulnerability_analysis.fstec_total }}</p>
+            
+            {% for vuln in scan.results.vulnerability_analysis.fstec_vulnerabilities %}
+            <div style="margin: 15px 0; padding: 15px; border: 2px solid #dc3545; border-radius: 5px; background: #fff5f5;">
+                <h4 style="margin: 0 0 10px 0; color: #dc3545;">
+                    {{ vuln.vuln_id }} 
+                    <span style="color: #dc3545; font-weight: bold;">
+                        [{{ vuln.severity }}]
+                    </span>
+                </h4>
+                <p style="margin: 5px 0;"><strong>Service:</strong> {{ vuln.service }} {{ vuln.version }} (port {{ vuln.port }})</p>
+                <p style="margin: 5px 0;"><strong>Name:</strong> {{ vuln.name }}</p>
+                <p style="margin: 5px 0;"><strong>Description:</strong> {{ vuln.description[:200] }}{% if vuln.description|length > 200 %}...{% endif %}</p>
+                <p style="margin: 5px 0;"><strong>Publication Date:</strong> {{ vuln.publication_date }}</p>
+                {% if vuln.solution and vuln.solution != 'N/A' %}
+                <p style="margin: 5px 0;"><strong>Solution:</strong> {{ vuln.solution[:200] }}{% if vuln.solution|length > 200 %}...{% endif %}</p>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
