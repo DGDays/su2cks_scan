@@ -16,7 +16,7 @@ def main():
         print(f"Ошибка при инициализации: {e}")
         return
 
-    # Поиск по идентификатору
+    # Поиск по идентификатору ==================================================
     print("\n" + "=" * 50)
     print("Проверяем поиск по идентификатору...")
 
@@ -36,23 +36,39 @@ def main():
     else:
         print(f"Не найдены уязвимости по идентификатору: {vuln_identifier}")
 
-    # Поиск по программе и версии
+    # Поиск по программе и версии ==================================================
     print("\n" + "=" * 50)
     print("Проверяем поиск по программе и версии...")
 
     software_name = "Java Development Kit"
-    software_version = "1.7.0 update 51"
+    # software_version = "1.7.0 update 45"
 
-    print(f"Поиск уязвимостей по программе: {software_name} {software_version}")
+    print(f"Поиск уязвимостей по программе: {software_name}")
     vulnerabilities = db.find_vulnerabilities(
-        software_name=software_name, software_version=software_version
+        software_name=software_name,
     )
 
     print(f"Нашлось {len(vulnerabilities)} уязвимостей:")
     for i, vuln in enumerate(vulnerabilities, 1):
         print(f"  {i}. {vuln.get('identifier', 'N/A')} - {vuln.get('name', 'N/A')}")
 
-    # Поиск по CVE
+    # Поиск по программе и версии (размытый) ==================================================
+    print("\n" + "=" * 50)
+    print("Проверяем поиск по программе и версии (размытый)...")
+
+    software_name = "Apache httpd"
+    software_version = "2.4.53"
+
+    print(f"Поиск уязвимостей по программе: {software_name}")
+    vulnerabilities = db.find_vulnerabilities(
+        software_name=software_name, software_version=software_version, fuzzy=True
+    )
+
+    print(f"Нашлось {len(vulnerabilities)} уязвимостей:")
+    for i, vuln in enumerate(vulnerabilities, 1):
+        print(f"  {i}. {vuln.get('identifier', 'N/A')} - {vuln.get('name', 'N/A')}")
+
+    # Поиск по CVE ==================================================
     print("\n" + "=" * 50)
     print("Проверяем поиск по CVE...")
 
@@ -68,7 +84,7 @@ def main():
     print("\n" + "=" * 50)
     print("Тест завершен!")
 
-    db.clear_database()
+    # db.clear_database()
 
 
 if __name__ == "__main__":

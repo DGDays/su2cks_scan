@@ -1,5 +1,6 @@
 import redis
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 import xml.etree.ElementTree as ET
@@ -11,6 +12,12 @@ from typing import List, Dict, Optional
 # Сертификат МинЦифры
 CORE_DIR = Path(__file__).parent
 CERT_PATH = CORE_DIR / "cert" / "russian_trusted_combined_ca_pem.crt"
+
+
+def extract_version(version_string: str) -> str:
+    # Извлекает только первое появление версии вида x.x.x.x...
+    match = re.search(r"\d+(?:\.\d+)+", version_string)
+    return match.group() if match else ""
 
 
 class VulnerabilityDB:
@@ -129,8 +136,8 @@ class VulnerabilityDB:
 
         except requests.exceptions.RequestException as e:
             raise ValueError(f"Не удалось скачать БД ФСТЭК: {e}")
-        # except Exception as e:
-        #    raise ValueError(f"Не удалось инициализировать БД REDIS: {e}")
+        except Exception as e:
+            raise ValueError(f"Не удалось инициализировать БД REDIS: {e}")
 
     def _store_vulnerability(self, vul_element: ET.Element) -> None:
         # Запись конкретной уязвимости в Redis
@@ -154,7 +161,7 @@ class VulnerabilityDB:
             index_key = f"cve:{vul_data['cve_id'].lower()}"
             self.r.sadd(index_key, vul_id)
 
-            print(f"found {index_key}")
+            # print(f"found {index_key}")
 
         # Записываем питоновский словарь в Redis через mapping
         mapping = {k: v or "" for k, v in vul_data.items()}
@@ -205,8 +212,17 @@ class VulnerabilityDB:
         return vuln_data
 
     def find_vulnerabilities(
-        self, software_name=None, software_version=None, cve_id=None
+        self,
+        software_name="*",
+        software_version="*",
+        vendor="*",
+        cve_id=None,
+        fuzzy=False,
     ) -> List[Dict]:
+        # Оставляем только вид версий x.x.x.x...
+        if software_version != "*":
+            software_version = extract_version(software_version)
+
         # Поиск по cve_id
         if cve_id is not None:
             cve_id = cve_id.lower()
@@ -226,9 +242,22 @@ class VulnerabilityDB:
 
             return results
 
-        # Получаем идентификаторы уязвимостей по ранее созданным группам уязвимостей (сгруппированы по одному названию софта и версии)
-        index_key = f"idx:{software_name.lower()}:{software_version.lower()}"
-        vuln_ids = self.r.smembers(index_key)
+        # Размытый поиск по наименованию и версии
+        if fuzzy:
+            return self.fuzzy_search(software_name, software_version)
+
+        # Получаем идентификаторы уязвимостей по ранее созданным группам уязвимостей
+        # (сгруппированы по одному названию софта и версии)
+        index_key = (
+            f"idx:{software_name.lower()}:*{software_version.lower()}*:{vendor.lower()}"
+        )
+
+        vuln_keys = self.r.keys(index_key)
+
+        vuln_ids = set()
+        for key in list(vuln_keys):
+            for member in self.r.smembers(key):
+                vuln_ids.add(member)
 
         if not vuln_ids:
             return []
@@ -241,6 +270,86 @@ class VulnerabilityDB:
                 results.append(vuln_data)
 
         return results
+
+    def fuzzy_search(self, software_name: str, software_version="*") -> List[Dict]:
+        # Разобьем входное название ПО на слова
+        words = software_name.lower().split()
+        if not words:
+            return []
+
+        # Получим все возможные ключи по каждому из слов отдельно,
+        # запихнём в set, чтобы не повторялись
+        all_matching_keys = set()
+
+        # Перебираем слова по наименованию софта (software_name)
+        for word in words:
+            pattern = f"idx:*{word}*:*{software_version}*:*"
+            matching_keys = self.r.keys(pattern)
+            for key in matching_keys:
+                all_matching_keys.add(key)
+
+            # print(word, matching_keys)
+
+        # Перебираем слова по вендору софта (vendor)
+        for word in words:
+            pattern = f"idx:*:*{software_version}*:*{word}*"
+            matching_keys = self.r.keys(pattern)
+            for key in matching_keys:
+                all_matching_keys.add(key)
+
+        # Подсчитываем, сколько раз встречаются слова из "words" в каждом
+        # полученном ключе
+        scored_results = []
+        seen_vuln_ids = set()
+
+        for key in list(all_matching_keys):
+            # Ключи имеют вид: "idx:name:version:vendor"
+            parts = key.split(":")
+
+            # По сути не встречается такая ситуация, но МАЛО ЛИ
+            if len(parts) < 3:
+                print(parts)
+                continue
+
+            name = parts[1]
+            version = parts[2] if len(parts) > 2 else ""
+            vendor = parts[3] if len(parts) > 3 else ""
+
+            # Подсчитываем сколько раз встречаются слова из "words" в
+            # рассматриваемом ключе
+            name_lower = name.lower()
+            matched_words = sum(1 for word in words if word in name_lower)
+
+            vendor_lower = vendor.lower()
+            matched_words += sum(1 for word in words if word in vendor_lower)
+
+            # По сути не встречается такая ситуация, но МАЛО ЛИ
+            if matched_words == 0:
+                continue
+
+            # Получаем уязвимости по данному ключу
+            vulns = self.find_vulnerabilities(name, version, vendor)
+
+            for vuln in vulns:
+                vuln_id = vuln.get("identifier")
+                if not vuln_id or vuln_id in seen_vuln_ids:
+                    continue
+
+                # Сохраняем с количеством встречающихся слов, для сортировки по актуальности
+                scored_results.append(
+                    {
+                        "vuln": vuln,
+                        "match_score": matched_words,
+                        "software_name": name,
+                    }
+                )
+                seen_vuln_ids.add(vuln_id)
+
+        # Сортируем по количеству встречающихся слов из "words"
+        scored_results.sort(key=lambda x: (-x["match_score"], x["software_name"]))
+
+        # Пихаем отсортированные уязвимости
+        return [result["vuln"] for result in scored_results]
 
     def clear_database(self) -> None:
         keys = self.r.keys("vuln:*")
