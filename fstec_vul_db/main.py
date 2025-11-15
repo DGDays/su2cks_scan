@@ -51,6 +51,8 @@ def main():
     print("\n" + "=" * 50)
     print("Тест завершен!")
 
+    # db.clear_database()
+
 
 if __name__ == "__main__":
     main()

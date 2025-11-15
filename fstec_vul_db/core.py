@@ -1,12 +1,16 @@
 import redis
 import json
+from pathlib import Path
 from datetime import datetime
 import xml.etree.ElementTree as ET
 import requests
 from io import BytesIO
 from zipfile import ZipFile
 from typing import List, Dict, Optional
-# from .exceptions import VulnDBError, DownloadError, RedisConnectionError
+
+# Сертификат МинЦифры
+CORE_DIR = Path(__file__).parent
+CERT_PATH = CORE_DIR / "cert" / "russian_trusted_combined_ca_pem.crt"
 
 
 class VulnerabilityDB:
@@ -100,7 +104,7 @@ class VulnerabilityDB:
         """
 
         try:
-            response = requests.get(self.source_url, timeout=30)
+            response = requests.get(self.source_url, timeout=30, verify=CERT_PATH)
             response.raise_for_status()
 
             with ZipFile(BytesIO(response.content)) as zip_file:
@@ -214,5 +218,9 @@ class VulnerabilityDB:
 
     def clear_database(self) -> None:
         keys = self.r.keys("vuln:*")
+        keys_date = self.r.keys("lastUpdated")
         if keys:
             self.r.delete(*keys)
+
+        if keys_date:
+            self.r.delete(*keys_date)
