@@ -129,8 +129,8 @@ class VulnerabilityDB:
 
         except requests.exceptions.RequestException as e:
             raise ValueError(f"Не удалось скачать БД ФСТЭК: {e}")
-        except Exception as e:
-            raise ValueError(f"Не удалось инициализировать БД REDIS: {e}")
+        # except Exception as e:
+        #    raise ValueError(f"Не удалось инициализировать БД REDIS: {e}")
 
     def _store_vulnerability(self, vul_element: ET.Element) -> None:
         # Запись конкретной уязвимости в Redis
@@ -147,7 +147,14 @@ class VulnerabilityDB:
             "publication_date": vul_element.findtext("publication_date"),
             "severity": vul_element.findtext("severity"),
             "solution": vul_element.findtext("solution"),
+            "cve_id": vul_element.findtext('identifiers/identifier[@type="CVE"]'),
         }
+        # Присваиваем записи индекс по CVE
+        if vul_data["cve_id"]:
+            index_key = f"cve:{vul_data['cve_id'].lower()}"
+            self.r.sadd(index_key, vul_id)
+
+            print(f"found {index_key}")
 
         # Записываем питоновский словарь в Redis через mapping
         mapping = {k: v or "" for k, v in vul_data.items()}
@@ -171,7 +178,7 @@ class VulnerabilityDB:
                 # Задаём группу уязвимостей, с одинаковыми названиями программ и версиями для быстрого поиска
                 # по названию программы и её версии
                 if soft_data["name"] and soft_data["version"]:
-                    index_key = f"idx:{soft_data['name'].lower()}:{soft_data['version'].lower()}"
+                    index_key = f"idx:{soft_data['name'].lower()}:{soft_data['version'].lower()}:{soft_data['vendor'].lower()}"
                     self.r.sadd(index_key, vul_id)
 
     def get_last_updated(self) -> Optional[str]:
@@ -198,8 +205,27 @@ class VulnerabilityDB:
         return vuln_data
 
     def find_vulnerabilities(
-        self, software_name: str, software_version: str
+        self, software_name=None, software_version=None, cve_id=None
     ) -> List[Dict]:
+        # Поиск по cve_id
+        if cve_id is not None:
+            cve_id = cve_id.lower()
+            index_key = f"cve:{cve_id}"
+            vuln_ids = self.r.smembers(index_key)
+
+            if not vuln_ids:
+                return []
+
+            # Получаем более подробные данные для каждой найденной уязвимости
+            results = []
+
+            for vuln_id in vuln_ids:
+                vuln_data = self.get_vuln_by_id(vuln_id)
+                if vuln_data:
+                    results.append(vuln_data)
+
+            return results
+
         # Получаем идентификаторы уязвимостей по ранее созданным группам уязвимостей (сгруппированы по одному названию софта и версии)
         index_key = f"idx:{software_name.lower()}:{software_version.lower()}"
         vuln_ids = self.r.smembers(index_key)

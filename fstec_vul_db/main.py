@@ -16,6 +16,7 @@ def main():
         print(f"Ошибка при инициализации: {e}")
         return
 
+    # Поиск по идентификатору
     print("\n" + "=" * 50)
     print("Проверяем поиск по идентификатору...")
 
@@ -35,6 +36,7 @@ def main():
     else:
         print(f"Не найдены уязвимости по идентификатору: {vuln_identifier}")
 
+    # Поиск по программе и версии
     print("\n" + "=" * 50)
     print("Проверяем поиск по программе и версии...")
 
@@ -42,7 +44,22 @@ def main():
     software_version = "1.7.0 update 51"
 
     print(f"Поиск уязвимостей по программе: {software_name} {software_version}")
-    vulnerabilities = db.find_vulnerabilities(software_name, software_version)
+    vulnerabilities = db.find_vulnerabilities(
+        software_name=software_name, software_version=software_version
+    )
+
+    print(f"Нашлось {len(vulnerabilities)} уязвимостей:")
+    for i, vuln in enumerate(vulnerabilities, 1):
+        print(f"  {i}. {vuln.get('identifier', 'N/A')} - {vuln.get('name', 'N/A')}")
+
+    # Поиск по CVE
+    print("\n" + "=" * 50)
+    print("Проверяем поиск по CVE...")
+
+    cve_id = "cve-2006-2936"
+
+    print(f"Поиск уязвимостей по CVE: {cve_id}")
+    vulnerabilities = db.find_vulnerabilities(cve_id=cve_id)
 
     print(f"Нашлось {len(vulnerabilities)} уязвимостей:")
     for i, vuln in enumerate(vulnerabilities, 1):
@@ -51,7 +68,7 @@ def main():
     print("\n" + "=" * 50)
     print("Тест завершен!")
 
-    # db.clear_database()
+    db.clear_database()
 
 
 if __name__ == "__main__":
