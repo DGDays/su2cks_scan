@@ -429,7 +429,7 @@ def search_exploits(target=None, nmap_xml=None, query=None, options=None):
     """
     try:
         # Базовые опции
-        base_options = options or ""
+        base_options = options or " -j "
         
         # Если передан XML Nmap
         if nmap_xml:
