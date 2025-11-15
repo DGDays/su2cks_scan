@@ -52,7 +52,7 @@ def init_fstec_db():
         return None
 
 # Использование в твоих функциях
-def search_fstec_vulnerabilities(service_name: str, service_version: str):
+def search_fstec_vulnerabilities(service_name=None, service_version=None, cve_id=None):
     """
     Поиск уязвимостей в БД ФСТЭК для сервиса
     """
@@ -74,10 +74,14 @@ def search_fstec_vulnerabilities(service_name: str, service_version: str):
             'netbios-ssn': 'Samba'
         }
         
-        search_name = service_map.get(service_name.lower(), service_name)
         
-        print(f"[+] Поиск в БД ФСТЭК: {search_name} {service_version}")
-        vulnerabilities = db.find_vulnerabilities(search_name, service_version)
+        if cve_id is None:
+            search_name = service_map.get(service_name.lower(), service_name)
+            print(f"[+] Поиск в БД ФСТЭК: {search_name} {service_version}")
+            vulnerabilities = db.find_vulnerabilities(software_name=search_name, software_version=service_version)
+        else:
+            print(f"[+] Поиск в БД ФСТЭК: {cve_id}")
+            vulnerabilities = db.find_vulnerabilities(cve_id=cve_id)
         
         return vulnerabilities
         
@@ -137,7 +141,7 @@ def start_cve_analysis_async(scan_data, nmap_output):
                 
                 # Ищем в БД ФСТЭК
                 print(f"[{i+1}/{len(services_to_analyze)}] Поиск в БД ФСТЭК для: {service['name']} {service['version']}")
-                fstec_vulns = search_fstec_vulnerabilities(service['name'], service['version'])
+                fstec_vulns = search_fstec_vulnerabilities(service_name=service['name'], service_version=service['version'])
                 
                 if fstec_vulns:
                     for fstec_vuln in fstec_vulns:
@@ -152,6 +156,25 @@ def start_cve_analysis_async(scan_data, nmap_output):
                             'publication_date': fstec_vuln.get('publication_date', 'N/A'),
                             'solution': fstec_vuln.get('solution', 'N/A')
                         })
+
+            print("+++++++++++ Ищем ФСТЭК ПО CVE")
+            for cve in nvd_vulnerabilities:
+                fstec_vulns = search_fstec_vulnerabilities(cve_id=cve["cve_id"])
+
+                if fstec_vulns:
+                    for fstec_vuln in fstec_vulns:
+                        fstec_vulnerabilities.append({
+                            'service': fstec_vuln.get("software_list", "N/A")[0]["name"],
+                            'version': fstec_vuln.get("software_list", "N/A")[0]["version"],
+                            'port': fstec_vuln.get("port", "N/A"),
+                            'vuln_id': fstec_vuln.get('identifier', 'N/A'),
+                            'name': fstec_vuln.get('name', 'N/A'),
+                            'description': fstec_vuln.get('description', 'N/A'),
+                            'severity': fstec_vuln.get('severity', 'N/A'),
+                            'publication_date': fstec_vuln.get('publication_date', 'N/A'),
+                            'solution': fstec_vuln.get('solution', 'N/A')
+                        })
+
             
             # Сохраняем результаты ОТДЕЛЬНО
             scan_data['results']['vulnerability_analysis'] = {
