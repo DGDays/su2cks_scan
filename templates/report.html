@@ -286,17 +286,43 @@ let selectedFilePath = '/usr/share/wordlists/dirb/common.txt';
 document.getElementById('customWordlistFile').addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (file) {
-        selectedFilePath = '/usr/share/wordlists/' + file.name;
-        
-        // Показываем информацию о выбранном файле
-        document.getElementById('fileName').textContent = file.name;
-        document.getElementById('selectedFileInfo').style.display = 'block';
-        
-        // Показываем уведомление
         const statusDiv = document.getElementById('customScanStatus');
         statusDiv.style.display = 'block';
-        statusDiv.innerHTML = `<div style="color: #28a745;">✅ Выбран файл: ${file.name}</div>`;
-        setTimeout(() => statusDiv.style.display = 'none', 2000);
+        statusDiv.innerHTML = '<div style="color: #007bff;">⏳ Загрузка файла на сервер...</div>';
+        
+        // Создаем FormData для загрузки файла
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        fetch('/api/upload_wordlist', {
+            method: 'POST',
+            body: formData
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                selectedFilePath = data.filepath;
+                
+                // Безопасно обновляем отображение
+                const fileNameDisplay = document.getElementById('fileNameDisplay');
+                if (fileNameDisplay) {
+                    fileNameDisplay.textContent = data.filename;
+                }
+                
+                const selectedFileInfo = document.getElementById('selectedFileInfo');
+                if (selectedFileInfo) {
+                    selectedFileInfo.style.display = 'block';
+                }
+                
+                statusDiv.innerHTML = `<div style="color: #28a745;">✅ Файл загружен: ${data.filename}</div>`;
+                setTimeout(() => statusDiv.style.display = 'none', 3000);
+            } else {
+                statusDiv.innerHTML = `<div style="color: #dc3545;">❌ Ошибка загрузки: ${data.error}</div>`;
+            }
+        })
+        .catch(error => {
+            statusDiv.innerHTML = `<div style="color: #dc3545;">❌ Ошибка: ${error}</div>`;
+        });
     }
 });
 
