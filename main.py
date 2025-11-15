@@ -106,7 +106,7 @@ def start_cve_analysis_async(scan_data, nmap_output):
                 print("[-] Нет сервисов для CVE анализа")
                 return
             
-            services_to_analyze = services[:3]
+            services_to_analyze = services
             
             nvd_vulnerabilities = []  # ⭐ ОТДЕЛЬНО ДЛЯ NVD
             fstec_vulnerabilities = []  # ⭐ ОТДЕЛЬНО ДЛЯ ФСТЭК
