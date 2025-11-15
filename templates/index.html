@@ -291,7 +291,7 @@ function saveDashboardPdf() {
                                 html += `<pre>${scan.results.nikto.output.substring(0, 500)}...</pre>`;
                             }
                         } else if (scan.status === 'running') {
-                            html += `<p>Сканирование выполняется... (обновление через 3 секунды)</p>`;
+                            html += `<p>Сканирование выполняется... (страница скоро обновится...)</p>`;
                             setTimeout(poll, 3000);
                         }
                         

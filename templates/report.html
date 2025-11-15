@@ -340,7 +340,7 @@ function startCustomScan() {
     .then(r => r.json())
     .then(data => {
         if (data.status === 'started') {
-            statusDiv.innerHTML = '<div style="color: #28a745;">✅ Сканирование запущено! Страница обновится через 3 секунды...</div>';
+            statusDiv.innerHTML = '<div style="color: #28a745;">✅ Сканирование запущено! Страница скоро обновится...</div>';
             setTimeout(() => {
                 location.reload();
             }, 3000);
