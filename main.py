@@ -8,7 +8,10 @@ import pdfkit
 import tempfile
 import platform
 import uuid
+import requests
+import time
 from datetime import datetime
+from collections import deque
 from flask import Flask, render_template, request, jsonify, make_response
 import xml.etree.ElementTree as ET
   
@@ -30,6 +33,231 @@ UPLOAD_FOLDER = '/tmp/pentest_scanner_wordlists'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # =====================================================================================================================
+
+# Глобальные переменные для управления CVE анализом
+cve_analysis_queue = deque()
+cve_analysis_active = False
+nvd_request_times = deque()
+
+def start_cve_analysis_async(scan_data, nmap_output):
+    """
+    Запускает CVE анализ в отдельном потоке с ограничением запросов
+    """
+    global cve_analysis_active
+    
+    if cve_analysis_active:
+        print("[-] CVE анализ уже выполняется, добавляем в очередь")
+        cve_analysis_queue.append((scan_data, nmap_output))
+        return
+    
+    cve_analysis_active = True
+    
+    def async_cve_analysis():
+        global cve_analysis_active
+        
+        try:
+            print("[🚀] Запуск асинхронного CVE анализа в фоновом режиме...")
+            
+            # Парсим сервисы для анализа
+            services = parse_nmap_for_cve_services(nmap_output)
+            if not services:
+                print("[-] Нет сервисов для CVE анализа")
+                return
+            
+            # Ограничиваем количество анализируемых сервисов
+            services_to_analyze = services[:3]  # Только первые 3 сервиса
+            
+            vulnerabilities = []
+            
+            for i, service in enumerate(services_to_analyze):
+                print(f"[{i+1}/{len(services_to_analyze)}] Анализ CVE для: {service['name']} {service['version']}")
+                
+                # Делаем паузу между запросами (25 секунд)
+                if i > 0:
+                    wait_time = 25
+                    print(f"[⏳] Пауза {wait_time} секунд перед следующим запросом...")
+                    time.sleep(wait_time)
+                
+                # Ищем CVE для сервиса
+                cve_list = search_cve_for_service_safe(service['name'], service['version'])
+                
+                if cve_list:
+                    for cve in cve_list:
+                        vulnerabilities.append({
+                            'service': service['name'],
+                            'version': service['version'],
+                            'port': service['port'],
+                            'cve_id': cve['id'],
+                            'description': cve['description'],
+                            'cvss_score': cve.get('cvss_score', 'N/A'),
+                            'severity': cve.get('severity', 'N/A')
+                        })
+            
+            # Сохраняем результаты в scan_data
+            if vulnerabilities:
+                scan_data['results']['cve_analysis'] = {
+                    'vulnerabilities': vulnerabilities,
+                    'total_found': len(vulnerabilities),
+                    'scan_time': datetime.now().isoformat()
+                }
+                print(f"[✅] CVE анализ завершен: найдено {len(vulnerabilities)} уязвимостей")
+            else:
+                print("[ℹ️] CVE анализ завершен: уязвимости не найдены")
+            
+        except Exception as e:
+            print(f"[-] Ошибка асинхронного CVE анализа: {e}")
+        finally:
+            cve_analysis_active = False
+            
+            # Обрабатываем следующее сканирование в очереди
+            if cve_analysis_queue:
+                next_scan_data, next_nmap_output = cve_analysis_queue.popleft()
+                start_cve_analysis_async(next_scan_data, next_nmap_output)
+    
+    # Запускаем в отдельном потоке
+    thread = threading.Thread(target=async_cve_analysis)
+    thread.daemon = True
+    thread.start()
+
+def parse_nmap_for_cve_services(nmap_xml_output):
+    """
+    Парсит вывод Nmap для извлечения сервисов и версий для CVE анализа
+    """
+    try:
+        services = []
+        root = ET.fromstring(nmap_xml_output)
+        
+        for host in root.findall('host'):
+            for ports in host.findall('ports'):
+                for port in ports.findall('port'):
+                    if port.find('state').get('state') == 'open':
+                        service_elem = port.find('service')
+                        if service_elem is not None:
+                            service_name = service_elem.get('name', 'unknown')
+                            product = service_elem.get('product', '')
+                            version = service_elem.get('version', '')
+                            
+                            # Формируем полную версию
+                            full_version = product
+                            if version:
+                                full_version += f" {version}"
+                            
+                            # Фильтруем только интересные сервисы
+                            if service_name in ['http', 'https', 'ssh', 'ftp', 'mysql', 
+                                              'postgresql', 'microsoft-ds', 'netbios-ssn', 
+                                              'smb', 'telnet'] and full_version.strip():
+                                services.append({
+                                    'port': port.get('portid'),
+                                    'name': service_name,
+                                    'version': full_version.strip()
+                                })
+        
+        print(f"[+] Найдено {len(services)} сервисов для CVE анализа")
+        return services
+        
+    except Exception as e:
+        print(f"[-] Ошибка парсинга Nmap для CVE: {e}")
+        return []
+
+def search_cve_for_service_safe(service_name, service_version):
+    """
+    Безопасный поиск CVE с учетом лимитов NVD API
+    """
+    global nvd_request_times
+    
+    # Очищаем старые запросы (старше 30 секунд)
+    current_time = time.time()
+    while nvd_request_times and current_time - nvd_request_times[0] > 30:
+        nvd_request_times.popleft()
+    
+    # Проверяем лимит (5 запросов в 30 секунд)
+    if len(nvd_request_times) >= 5:
+        wait_time = 30 - (current_time - nvd_request_times[0])
+        print(f"[-] Достигнут лимит NVD API. Ожидание {wait_time:.1f} секунд...")
+        time.sleep(wait_time + 1)
+        current_time = time.time()
+        nvd_request_times.clear()
+    
+    # Добавляем текущий запрос
+    nvd_request_times.append(current_time)
+    
+    try:
+        # Нормализуем название сервиса
+        service_map = {
+            'http': 'apache', 'https': 'apache', 
+            'ssh': 'openssh', 'ftp': 'vsftpd',  # ⚠️ ИСПРАВИЛ: ftp -> vsftpd
+            'mysql': 'mysql', 'postgresql': 'postgresql', 
+            'microsoft-ds': 'windows', 'netbios-ssn': 'samba', 
+            'smb': 'samba', 'telnet': 'telnet'
+        }
+        
+        search_term = service_map.get(service_name.lower(), service_name.lower())
+        
+        # ⚠️ ИСПРАВИЛ: Правильный формат запроса
+        if service_name == 'ftp' and 'vsftpd' in service_version.lower():
+            search_term = 'vsftpd'
+            query = f"vsftpd 2.3.4"  # Конкретная версия
+        else:
+            query = f"{search_term} {service_version}"
+        
+        # ⚠️ ИСПРАВИЛ: Используем новый API endpoint
+        url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+        params = {
+            'keywordSearch': query,
+            'resultsPerPage': 5
+        }
+        
+        # ⚠️ ДОБАВИЛ: Заголовки для обхода ограничений
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (compatible; SecurityScanner/1.0)'
+        }
+        
+        print(f"[+] Запрос к NVD API: {query}")
+        response = requests.get(url, params=params, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            cve_list = []
+            
+            for vuln in data.get('vulnerabilities', []):
+                cve_data = vuln['cve']
+                cve_id = cve_data['id']
+                description = cve_data['descriptions'][0]['value']
+                
+                cvss_score = 'N/A'
+                severity = 'N/A'
+                
+                # Парсим CVSS v3 или v2
+                if 'metrics' in cve_data:
+                    if 'cvssMetricV31' in cve_data['metrics']:
+                        cvss_data = cve_data['metrics']['cvssMetricV31'][0]['cvssData']
+                        cvss_score = cvss_data['baseScore']
+                        severity = cvss_data['baseSeverity']
+                    elif 'cvssMetricV30' in cve_data['metrics']:
+                        cvss_data = cve_data['metrics']['cvssMetricV30'][0]['cvssData']
+                        cvss_score = cvss_data['baseScore']
+                        severity = cvss_data['baseSeverity']
+                    elif 'cvssMetricV2' in cve_data['metrics']:
+                        cvss_data = cve_data['metrics']['cvssMetricV2'][0]['cvssData']
+                        cvss_score = cvss_data['baseScore']
+                        severity = cve_data['metrics']['cvssMetricV2'][0]['baseSeverity']
+                
+                cve_list.append({
+                    'id': cve_id,
+                    'description': description[:200] + "..." if len(description) > 200 else description,
+                    'cvss_score': cvss_score,
+                    'severity': severity
+                })
+            
+            print(f"[+] Найдено {len(cve_list)} CVE для {search_term}")
+            return cve_list
+        else:
+            print(f"[-] Ошибка NVD API: {response.status_code} - {response.text[:100]}")
+            return []
+            
+    except Exception as e:
+        print(f"[-] Ошибка поиска CVE: {e}")
+        return []
 
 def find_wkhtmltopdf():
     """Автоматически находит путь к wkhtmltopdf"""
@@ -311,6 +539,7 @@ def run_arp_scan(network):
 
     return ip_addresses
 
+# Обновляем функцию сканирования чтобы включать CVE анализ
 def scan_target(target, scan_data):
     """Основная функция сканирования для одиночной цели"""
     try:
@@ -322,7 +551,11 @@ def scan_target(target, scan_data):
                 'parsed_ports': parse_nmap_xml(nmap_result['output'])
             }
             
-            # Проверяем веб-порты и запускаем Nikto/Gobuster
+            # Запускаем CVE анализ в фоновом режиме
+            print("[🚀] Запуск асинхронного CVE анализа...")
+            start_cve_analysis_async(scan_data, nmap_result['output'])
+            
+            # Остальное сканирование продолжается без ожидания CVE
             web_ports = []
             for port_info in scan_data['results']['nmap']['parsed_ports']:
                 if port_info['state'] == 'open':
@@ -602,6 +835,7 @@ def custom_scan():
     custom_wordlist = data.get('wordlist', '')
     port = data.get('port', 80)
     main_scan_id = data.get('main_scan_id', '')
+    commands = data.get('commands', '')  # ⭐ ДОБАВИЛ ЭТУ СТРОЧКУ!
     
     if not target or not main_scan_id:
         return jsonify({'error': 'Target and main_scan_id are required'}), 400
@@ -611,7 +845,7 @@ def custom_scan():
     
     # Запускаем в отдельном потоке
     thread = threading.Thread(target=run_custom_scan_and_update, 
-                             args=(target, port, scan_type, custom_wordlist, main_scan_id))
+                             args=(target, port, scan_type, custom_wordlist, main_scan_id, commands))  # ⭐ И commands ЗДЕСЬ!
     thread.daemon = True
     thread.start()
     

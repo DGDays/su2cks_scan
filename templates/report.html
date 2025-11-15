@@ -34,6 +34,48 @@
             <pre>{{ scan.results.nmap.raw_output }}</pre>
         </div>
         {% endif %}
+
+        {% if scan.results.cve_analysis %}
+        <div class="section">
+            <h2>🔍 Анализ уязвимостей CVE</h2>
+            <p><strong>Найдено уязвимостей:</strong> {{ scan.results.cve_analysis.total_found }}</p>
+            <p><strong>Время анализа:</strong> {{ scan.results.cve_analysis.scan_time[:19] }}</p>
+            
+            {% for vuln in scan.results.cve_analysis.vulnerabilities %}
+            <div style="margin: 15px 0; padding: 15px; border: 2px solid 
+                {% if vuln.severity == 'CRITICAL' %}#dc3545
+                {% elif vuln.severity == 'HIGH' %}#fd7e14
+                {% elif vuln.severity == 'MEDIUM' %}#ffc107
+                {% else %}#28a745{% endif %}; 
+                border-radius: 5px; background: #f8f9fa;">
+                <h4>
+                    {{ vuln.cve_id }} 
+                    <span style="color: 
+                        {% if vuln.severity == 'CRITICAL' %}#dc3545
+                        {% elif vuln.severity == 'HIGH' %}#fd7e14
+                        {% elif vuln.severity == 'MEDIUM' %}#ffc107
+                        {% else %}#28a745{% endif %}; 
+                        font-weight: bold;">
+                        [{{ vuln.severity }}]
+                    </span>
+                    {% if vuln.cvss_score != 'N/A' %}
+                    <span style="color: #6c757d; font-size: 14px;">
+                        (CVSS: {{ vuln.cvss_score }})
+                    </span>
+                    {% endif %}
+                </h4>
+                <p><strong>Сервис:</strong> {{ vuln.service }} {{ vuln.version }} (порт {{ vuln.port }})</p>
+                <p><strong>Описание:</strong> {{ vuln.description }}</p>
+                <p style="margin-top: 10px;">
+                    <a href="https://nvd.nist.gov/vuln/detail/{{ vuln.cve_id }}" target="_blank" 
+                    style="color: #007bff; text-decoration: none;">
+                        🔗 Подробнее на NVD
+                    </a>
+                </p>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
         
         {% if scan.results.nikto %}
         <div class="section">
@@ -56,46 +98,44 @@
         </div>
         {% endif %}
 
-        <!-- Секция для дополнительных сканирований -->
-        {% if scan.results.custom_scans %}
-        <div class="section">
-            <h2>🎯 Дополнительные сканирования</h2>
-            {% for key, custom_scan in scan.results.custom_scans.items() %}
-            <div style="margin: 15px 0; padding: 15px; border: 2px solid #28a745; border-radius: 5px; background: #f8fff9;">
-                <h4>🎯 
-                    {% if custom_scan.scan_type == 'dir' %}Поиск директорий
-                    {% else %}Поиск vhost{% endif %}
-                    ({{ custom_scan.timestamp[:19] }})
-                </h4>
-                <p><strong>Словарь:</strong> {{ custom_scan.wordlist_used }}</p>
-                <p><strong>Порт:</strong> {{ custom_scan.port }}</p>
-                <div style="margin-top: 10px;">
-                    <strong>Результаты:</strong>
-                    <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; max-height: 300px; overflow-y: auto;">{{ custom_scan.output or 'Нет результатов' }}</pre>
-                </div>
+    <!-- Секция для дополнительных сканирований -->
+    {% if scan.results.custom_scans %}
+    <div class="section">
+        <h2>🎯 Дополнительные сканирования</h2>
+        {% for key, custom_scan in scan.results.custom_scans.items() %}
+        <div style="margin: 15px 0; padding: 15px; border: 2px solid #28a745; border-radius: 5px; background: #f8fff9;">
+            <h4>🎯 
+                {% if custom_scan.scan_type == 'dir' %}Поиск директорий
+                {% elif custom_scan.scan_type == 'vhost' %}Поиск vhost
+                {% elif custom_scan.scan_type == 'sqlmap' %}SQL Injection Test
+                {% else %}{{ custom_scan.scan_type }}{% endif %}
+                ({{ custom_scan.timestamp[:19] }})
+            </h4>
+            
+            {% if custom_scan.scan_type == 'dir' or custom_scan.scan_type == 'vhost' %}
+            <p><strong>Словарь:</strong> {{ custom_scan.wordlist_used }}</p>
+            <p><strong>Порт:</strong> {{ custom_scan.port }}</p>
+            {% elif custom_scan.scan_type == 'sqlmap' %}
+            <p><strong>Команда:</strong> <code>sqlmap {{ custom_scan.commands }}</code></p>
+            <p><strong>Статус:</strong> {% if custom_scan.success %}✅ Успешно{% else %}❌ Ошибка{% endif %}</p>
+            <p><strong>Код возврата:</strong> {{ custom_scan.returncode }}</p>
+            {% endif %}
+            
+            <div style="margin-top: 10px;">
+                <strong>Результаты:</strong>
+                <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; max-height: 300px; overflow-y: auto;">{{ custom_scan.output or 'Нет результатов' }}</pre>
             </div>
-            {% endfor %}
-        </div>
-        {% endif %}
-
-        {% if scan.results.sqlmap %}
-        <div class="section">
-            <h2>🔍 SQLMap Результаты</h2>
-            <p><strong>Команда:</strong> <code>sqlmap {{ scan.results.sqlmap.commands }}</code></p>
-            <p><strong>Статус:</strong> {% if scan.results.sqlmap.success %}✅ Успешно{% else %}❌ Ошибка{% endif %}</p>
-            <p><strong>Код возврата:</strong> {{ scan.results.sqlmap.returncode }}</p>
             
-            {% if scan.results.sqlmap.output %}
-            <h4>Вывод SQLMap:</h4>
-            <pre style="background: #f5f5f5; padding: 15px; overflow: auto; max-height: 400px;">{{ scan.results.sqlmap.output }}</pre>
-            {% endif %}
-            
-            {% if scan.results.sqlmap.error %}
-            <h4>Ошибки:</h4>
-            <pre style="background: #fff5f5; padding: 15px; overflow: auto; max-height: 200px;">{{ scan.results.sqlmap.error }}</pre>
+            {% if custom_scan.scan_type == 'sqlmap' and custom_scan.error %}
+            <div style="margin-top: 10px;">
+                <strong>Ошибки:</strong>
+                <pre style="background: #fff5f5; padding: 10px; border-radius: 3px; max-height: 200px; overflow-y: auto;">{{ custom_scan.error }}</pre>
+            </div>
             {% endif %}
         </div>
-        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
 
 <!-- Модальное окно для кастомного сканирования -->
 <div id="customScanModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
@@ -245,9 +285,8 @@ function startCustomScan() {
         requestData.wordlist = selectedFilePath;
     } else if (scanType === 'sqlmap') {
         const commands = document.getElementById('sqlmapCustomCommands').value;
-        if (commands) {
-            requestData.commands = commands;
-        }
+        // ⭐ ПРОСТО ПЕРЕДАЕМ КОМАНДЫ КАК ЕСТЬ
+        requestData.commands = commands;
     }
     
     statusDiv.style.display = 'block';
