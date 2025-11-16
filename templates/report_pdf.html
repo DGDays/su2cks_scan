@@ -3,19 +3,61 @@
 <head>
     <meta charset="UTF-8">
     <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; }
-            .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; page-break-inside: avoid; }
-            .port { margin: 8px 0; padding: 8px; background: #f9f9f9; }
-            pre { 
-                background: #f5f5f5; 
-                padding: 10px; 
-                font-size: 10px; 
-                white-space: pre-wrap; /* Перенос строк */
-                word-wrap: break-word; /* Перенос длинных слов */
-                overflow: visible; /* Убираем скролл */
-                max-height: none !important; /* Убираем ограничение высоты */
-            .timestamp { color: #666; font-size: 12px; }
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; page-break-inside: avoid; }
+        .port { margin: 8px 0; padding: 8px; background: #f9f9f9; }
+        pre { 
+            background: #f5f5f5; 
+            padding: 10px; 
+            font-size: 10px; 
+            white-space: pre-wrap; /* Перенос строк */
+            word-wrap: break-word; /* Перенос длинных слов */
+            overflow: visible; /* Убираем скролл */
+            max-height: none !important; /* Убираем ограничение высоты */
+        }
+        .timestamp { color: #666; font-size: 12px; }
+        .ai-response { 
+            margin: 15px 0; 
+            padding: 15px; 
+            border: 2px solid #007bff; 
+            border-radius: 8px; 
+            background: #f8fbff;
+            page-break-inside: avoid;
+        }
+        .ai-header { 
+            display: flex; 
+            align-items: center; 
+            margin-bottom: 10px; 
+        }
+        .ai-number { 
+            background: #007bff; 
+            color: white; 
+            padding: 6px 10px; 
+            border-radius: 50%; 
+            font-weight: bold; 
+            margin-right: 10px;
+            font-size: 14px;
+        }
+        .ai-vuln-id { 
+            margin: 0; 
+            color: #007bff;
+            font-size: 16px;
+        }
+        .ai-content { 
+            padding: 12px; 
+            background: white; 
+            border-radius: 5px; 
+            border-left: 4px solid #007bff;
+            line-height: 1.4;
+            font-size: 12px;
+        }
+        .ai-footer { 
+            margin-top: 8px; 
+            font-size: 10px; 
+            color: #6c757d; 
+            text-align: right; 
+        }
     </style>
 </head>
 <body>
@@ -114,6 +156,35 @@
     </div>
     {% endif %}
 
+    <!-- AI Analysis Section -->
+    {% if scan.results.ai_analysis %}
+    <div class="section">
+        <h2>🤖 AI Vulnerability Analysis (GigaChat)</h2>
+        <p><strong>Vulnerabilities Analyzed:</strong> {{ scan.results.ai_analysis|length }}</p>
+        
+        {% for vuln_id, ai_response in scan.results.ai_analysis.items() %}
+        <div class="ai-response">
+            <div class="ai-header">
+                <span class="ai-number">
+                    {{ loop.index }}
+                </span>
+                <h4 class="ai-vuln-id">
+                    {{ vuln_id }}
+                </h4>
+            </div>
+            
+            <div class="ai-content">
+                {{ ai_response }}
+            </div>
+            
+            <div class="ai-footer">
+                🤖 Analysis by GigaChat AI
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
     <!-- Searchsploit Exploits Section -->
     {% if scan.results.exploits %}
     <div class="section">
@@ -148,6 +219,7 @@
         <pre>{{ scan.results.gobuster_vhost.output }}</pre>
     </div>
     {% endif %}
+    
     <!-- Дополнительные сканирования -->
     {% if scan.results.custom_scans %}
     <div class="section">

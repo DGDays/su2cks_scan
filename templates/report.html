@@ -103,6 +103,37 @@
         </div>
         {% endif %}
 
+        <!-- AI Analysis Section -->
+        {% if scan.results.ai_analysis %}
+        <div class="section">
+            <h2>🤖 AI Анализ уязвимостей (GigaChat)</h2>
+            <p><strong>Проанализировано уязвимостей:</strong> {{ scan.results.ai_analysis|length }}</p>
+            
+            {% for vuln_id, ai_response in scan.results.ai_analysis.items() %}
+            <div style="margin: 20px 0; padding: 20px; border: 2px solid #007bff; border-radius: 8px; background: #f8fbff;">
+                <div style="display: flex; align-items: center; margin-bottom: 15px;">
+                    <span style="background: #007bff; color: white; padding: 8px 12px; border-radius: 50%; font-weight: bold; margin-right: 10px;">
+                        {{ loop.index }}
+                    </span>
+                    <h4 style="margin: 0; color: #007bff;">
+                        {{ vuln_id }}
+                    </h4>
+                </div>
+                
+                <div style="padding: 15px; background: white; border-radius: 5px; border-left: 4px solid #007bff;">
+                    <p style="margin: 0; line-height: 1.6; color: #333;">
+                        {{ ai_response }}
+                    </p>
+                </div>
+                
+                <div style="margin-top: 10px; font-size: 12px; color: #6c757d; text-align: right;">
+                    🤖 Анализ от GigaChat
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
         <!-- Exploits Section -->
         {% if scan.results.exploits %}
         <div class="section">
