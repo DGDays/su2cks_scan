@@ -15,7 +15,7 @@ from collections import deque
 from flask import Flask, render_template, request, jsonify, make_response
 import xml.etree.ElementTree as ET
 from gigachat import GigaChat
-# Добавляем путь к папке fstec_vul_db
+
 sys.path.append(os.path.join(os.path.dirname(__file__), 'fstec_vul_db'))
 from core import VulnerabilityDB
   
@@ -30,21 +30,17 @@ from core import VulnerabilityDB
    '''
 
 app = Flask(__name__)
-# Хранилище результатов сканирований
 scan_results = {}
 UPLOAD_FOLDER = '/tmp/pentest_scanner_wordlists'
 GIGACHAD_TOKEN = "token"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# =====================================================================================================================
-
-# Глобальные переменные для управления CVE анализом
 cve_analysis_queue = deque()
 cve_analysis_active = False
 nvd_request_times = deque()
 
 def init_fstec_db():
-    """Инициализация БД ФСТЭК"""
+    """Инициализация базы данных уязвимостей ФСТЭК"""
     try:
         db = VulnerabilityDB()
         print("[✅] БД ФСТЭК инициализирована")
@@ -53,17 +49,13 @@ def init_fstec_db():
         print(f"[-] Ошибка инициализации БД ФСТЭК: {e}")
         return None
 
-# Использование в твоих функциях
 def search_fstec_vulnerabilities(service_name=None, service_version=None, cve_id=None):
-    """
-    Поиск уязвимостей в БД ФСТЭК для сервиса
-    """
+    """Поиск уязвимостей в базе данных ФСТЭК для указанного сервиса или CVE"""
     try:
         db = init_fstec_db()
         if not db:
             return []
         
-        # Маппинг названий сервисов
         service_map = {
             'ftp': 'vsftpd',
             'http': 'Apache HTTP Server',
@@ -75,7 +67,6 @@ def search_fstec_vulnerabilities(service_name=None, service_version=None, cve_id
             'microsoft-ds': 'Windows',
             'netbios-ssn': 'Samba'
         }
-        
         
         if cve_id is None:
             search_name = service_map.get(service_name.lower(), service_name)
@@ -92,6 +83,7 @@ def search_fstec_vulnerabilities(service_name=None, service_version=None, cve_id
         return []
 
 def start_cve_analysis_async(scan_data, nmap_output):
+    """Запуск асинхронного анализа CVE уязвимостей в фоновом режиме"""
     global cve_analysis_active
     
     if cve_analysis_active:
@@ -114,19 +106,17 @@ def start_cve_analysis_async(scan_data, nmap_output):
             
             services_to_analyze = services
             
-            nvd_vulnerabilities = []  # ⭐ ОТДЕЛЬНО ДЛЯ NVD
-            fstec_vulnerabilities = []  # ⭐ ОТДЕЛЬНО ДЛЯ ФСТЭК
+            nvd_vulnerabilities = []
+            fstec_vulnerabilities = []
             
             for i, service in enumerate(services_to_analyze):
                 print(f"[{i+1}/{len(services_to_analyze)}] Анализ CVE для: {service['name']} {service['version']}")
                 
-                # Делаем паузу между запросами
                 if i > 0:
                     wait_time = 25
                     print(f"[⏳] Пауза {wait_time} секунд перед следующим запросом...")
                     time.sleep(wait_time)
                 
-                # Ищем CVE для сервиса (NVD)
                 cve_list = search_cve_for_service_safe(service['name'], service['version'])
                 
                 if cve_list:
@@ -141,7 +131,6 @@ def start_cve_analysis_async(scan_data, nmap_output):
                             'severity': cve.get('severity', 'N/A')
                         })
                 
-                # Ищем в БД ФСТЭК
                 print(f"[{i+1}/{len(services_to_analyze)}] Поиск в БД ФСТЭК для: {service['name']} {service['version']}")
                 fstec_vulns = search_fstec_vulnerabilities(service_name=service['name'], service_version=service['version'])
                 
@@ -193,7 +182,6 @@ def start_cve_analysis_async(scan_data, nmap_output):
                         gigachat_responses[i["vuln_id"]] = response
                 scan_data['results']['ai_analysis'] = gigachat_responses
             
-            # Сохраняем результаты ОТДЕЛЬНО
             scan_data['results']['vulnerability_analysis'] = {
                 'nvd_vulnerabilities': nvd_vulnerabilities,
                 'fstec_vulnerabilities': fstec_vulnerabilities,
@@ -220,9 +208,7 @@ def start_cve_analysis_async(scan_data, nmap_output):
     thread.start()
 
 def parse_nmap_for_cve_services(nmap_xml_output):
-    """
-    Парсит вывод Nmap для извлечения сервисов и версий для CVE анализа
-    """
+    """Парсит вывод Nmap для извлечения информации о сервисах и версиях для последующего CVE анализа"""
     try:
         services = []
         root = ET.fromstring(nmap_xml_output)
@@ -237,12 +223,10 @@ def parse_nmap_for_cve_services(nmap_xml_output):
                             product = service_elem.get('product', '')
                             version = service_elem.get('version', '')
                             
-                            # Формируем полную версию
                             full_version = product
                             if version:
                                 full_version += f" {version}"
                             
-                            # Фильтруем только интересные сервисы
                             if service_name in ['http', 'https', 'ssh', 'ftp', 'mysql', 
                                               'postgresql', 'microsoft-ds', 'netbios-ssn', 
                                               'smb', 'telnet'] and full_version.strip():
@@ -260,17 +244,13 @@ def parse_nmap_for_cve_services(nmap_xml_output):
         return []
 
 def search_cve_for_service_safe(service_name, service_version):
-    """
-    Безопасный поиск CVE с учетом лимитов NVD API
-    """
+    """Безопасный поиск CVE с учетом ограничений API NVD и управлением частотой запросов"""
     global nvd_request_times
     
-    # Очищаем старые запросы (старше 30 секунд)
     current_time = time.time()
     while nvd_request_times and current_time - nvd_request_times[0] > 30:
         nvd_request_times.popleft()
     
-    # Проверяем лимит (5 запросов в 30 секунд)
     if len(nvd_request_times) >= 5:
         wait_time = 30 - (current_time - nvd_request_times[0])
         print(f"[-] Достигнут лимит NVD API. Ожидание {wait_time:.1f} секунд...")
@@ -278,14 +258,12 @@ def search_cve_for_service_safe(service_name, service_version):
         current_time = time.time()
         nvd_request_times.clear()
     
-    # Добавляем текущий запрос
     nvd_request_times.append(current_time)
     
     try:
-        # Нормализуем название сервиса
         service_map = {
             'http': 'apache', 'https': 'apache', 
-            'ssh': 'openssh', 'ftp': 'vsftpd',  # ⚠️ ИСПРАВИЛ: ftp -> vsftpd
+            'ssh': 'openssh', 'ftp': 'vsftpd',
             'mysql': 'mysql', 'postgresql': 'postgresql', 
             'microsoft-ds': 'windows', 'netbios-ssn': 'samba', 
             'smb': 'samba', 'telnet': 'telnet'
@@ -293,21 +271,18 @@ def search_cve_for_service_safe(service_name, service_version):
         
         search_term = service_map.get(service_name.lower(), service_name.lower())
         
-        # ⚠️ ИСПРАВИЛ: Правильный формат запроса
         if service_name == 'ftp' and 'vsftpd' in service_version.lower():
             search_term = 'vsftpd'
-            query = f"vsftpd 2.3.4"  # Конкретная версия
+            query = f"vsftpd 2.3.4"
         else:
             query = f"{search_term} {service_version}"
         
-        # ⚠️ ИСПРАВИЛ: Используем новый API endpoint
         url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
         params = {
             'keywordSearch': query,
             'resultsPerPage': 5
         }
         
-        # ⚠️ ДОБАВИЛ: Заголовки для обхода ограничений
         headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; SecurityScanner/1.0)'
         }
@@ -327,7 +302,6 @@ def search_cve_for_service_safe(service_name, service_version):
                 cvss_score = 'N/A'
                 severity = 'N/A'
                 
-                # Парсим CVSS v3 или v2
                 if 'metrics' in cve_data:
                     if 'cvssMetricV31' in cve_data['metrics']:
                         cvss_data = cve_data['metrics']['cvssMetricV31'][0]['cvssData']
@@ -360,9 +334,7 @@ def search_cve_for_service_safe(service_name, service_version):
         return []
     
 def nmap_exploit_scan(target, ports=None, options="-sV", searchsploit_options=""):
-    """
-    Выполняет сканирование Nmap и поиск эксплойтов через searchsploit
-    """
+    """Выполняет сканирование Nmap с последующим поиском эксплойтов через searchsploit"""
     results = {
         'target': target,
         'timestamp': datetime.now().isoformat(),
@@ -374,11 +346,9 @@ def nmap_exploit_scan(target, ports=None, options="-sV", searchsploit_options=""
     }
     
     try:
-        # Создаем временный XML-файл
         with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as tmp_file:
             xml_filename = tmp_file.name
         
-        # Формируем команду Nmap
         nmap_cmd = f"nmap {options}"
         if ports:
             nmap_cmd += f" -p {ports}"
@@ -388,7 +358,6 @@ def nmap_exploit_scan(target, ports=None, options="-sV", searchsploit_options=""
         
         print(f"🔍 Выполняю сканирование Nmap: {nmap_cmd}")
         
-        # Выполняем Nmap сканирование
         nmap_process = subprocess.run(
             nmap_cmd.split(),
             capture_output=True,
@@ -400,11 +369,9 @@ def nmap_exploit_scan(target, ports=None, options="-sV", searchsploit_options=""
             results['error'] = f"Nmap ошибка: {nmap_process.stderr}"
             return results
         
-        # Парсим XML результат
         tree = ET.parse(xml_filename)
         root = tree.getroot()
         
-        # Извлекаем информацию об открытых портах
         for host in root.findall('host'):
             for ports_elem in host.findall('ports'):
                 for port_elem in ports_elem.findall('port'):
@@ -424,7 +391,6 @@ def nmap_exploit_scan(target, ports=None, options="-sV", searchsploit_options=""
                         
                         results['open_ports'].append(port_info)
         
-        # Запускаем searchsploit с XML-файлом
         print("🎯 Ищу эксплойты через searchsploit...")
         
         searchsploit_cmd = f"searchsploit --nmap {xml_filename} {searchsploit_options}"
@@ -437,7 +403,6 @@ def nmap_exploit_scan(target, ports=None, options="-sV", searchsploit_options=""
         results['searchsploit_output'] = exploit_process.stdout
         
         if exploit_process.returncode == 0:
-            # Парсим вывод searchsploit для поиска уязвимых сервисов
             for line in exploit_process.stdout.split('\n'):
                 if '|' in line and not line.startswith('--'):
                     parts = [p.strip() for p in line.split('|')]
@@ -457,38 +422,29 @@ def nmap_exploit_scan(target, ports=None, options="-sV", searchsploit_options=""
     except Exception as e:
         results['error'] = f"Ошибка: {str(e)}"
     finally:
-        # Удаляем временный файл
         if 'xml_filename' in locals() and os.path.exists(xml_filename):
             os.unlink(xml_filename)
     
     return results
 
 def search_exploits(target=None, nmap_xml=None, query=None, options=None):
-    """
-    Функция для поиска эксплойтов через searchsploit
-    """
+    """Выполняет поиск эксплойтов через searchsploit на основе результатов Nmap или прямого запроса"""
     try:
-        # Базовые опции
         base_options = options or " -j "
         
-        # Если передан XML Nmap
         if nmap_xml:
             print(f"[+] Поиск эксплойтов для результатов Nmap")
             
-            # Создаем временный файл для XML
             with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as tmp_file:
                 tmp_file.write(nmap_xml)
                 xml_filename = tmp_file.name
             
-            # Команда для searchsploit с XML
             cmd = f"searchsploit --nmap {xml_filename} {base_options}"
             
-        # Если передан прямой запрос
         elif query:
             print(f"[+] Поиск эксплойтов для запроса: {query}")
             cmd = f"searchsploit {query} {base_options}"
             
-        # Если указана цель
         elif target:
             print(f"[+] Поиск эксплойтов для цели: {target}")
             cmd = f"searchsploit {target} {base_options}"
@@ -501,7 +457,6 @@ def search_exploits(target=None, nmap_xml=None, query=None, options=None):
         
         print(f"[+] Выполняю: {cmd}")
         
-        # Выполняем поиск
         result = subprocess.run(
             cmd.split(),
             capture_output=True,
@@ -526,7 +481,7 @@ def search_exploits(target=None, nmap_xml=None, query=None, options=None):
                 pass
         out = '\n'.join(out)
         response['output'] = out
-        # Очистка временного файла
+        
         if 'xml_filename' in locals() and os.path.exists(xml_filename):
             os.unlink(xml_filename)
         
@@ -547,8 +502,7 @@ def search_exploits(target=None, nmap_xml=None, query=None, options=None):
         }
 
 def find_wkhtmltopdf():
-    """Автоматически находит путь к wkhtmltopdf"""
-    # Список возможных путей для разных ОС
+    """Автоматически находит путь к wkhtmltopdf для генерации PDF отчетов"""
     possible_paths = []
     
     system = platform.system().lower()
@@ -558,24 +512,22 @@ def find_wkhtmltopdf():
             r'C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe',
             r'C:\Program Files (x86)\wkhtmltopdf\bin\wkhtmltopdf.exe',
             r'C:\wkhtmltopdf\bin\wkhtmltopdf.exe',
-            'wkhtmltopdf.exe'  # Если добавлен в PATH
+            'wkhtmltopdf.exe'
         ]
-    elif system == 'linux' or system == 'darwin':  # Linux или Mac
+    elif system == 'linux' or system == 'darwin':
         possible_paths = [
             '/usr/bin/wkhtmltopdf',
             '/usr/local/bin/wkhtmltopdf',
             '/bin/wkhtmltopdf',
             '/opt/bin/wkhtmltopdf',
-            'wkhtmltopdf'  # Если в PATH
+            'wkhtmltopdf'
         ]
     
-    # Проверяем каждый путь
     for path in possible_paths:
         if os.path.exists(path):
             print(f"[+] Найден wkhtmltopdf: {path}")
             return path
     
-    # Пробуем найти через which/where
     try:
         if system == 'windows':
             result = subprocess.run(['where', 'wkhtmltopdf'], 
@@ -591,7 +543,6 @@ def find_wkhtmltopdf():
     except:
         pass
     
-    # Если ничего не нашли
     print("[-] Wkhtmltopdf не найден. Установите его:")
     if system == 'windows':
         print("Скачайте с: https://wkhtmltopdf.org/downloads.html")
@@ -601,7 +552,6 @@ def find_wkhtmltopdf():
     
     return None
 
-# Конфигурация pdfkit с автопоиском
 try:
     wkhtmltopdf_path = find_wkhtmltopdf()
     if wkhtmltopdf_path:
@@ -614,15 +564,13 @@ except Exception as e:
     print(f"[-] Ошибка инициализации PDF_CONFIG: {e}")
     PDF_CONFIG = None
 
-
 def run_nmap(target):
-    """Запуск Nmap сканирования"""
+    """Выполняет базовое сканирование Nmap для определения открытых портов и версий сервисов"""
     try:
         print(f"[+] Запуск Nmap для {target}")
-        # Быстрое сканирование портов и определение версий
         result = subprocess.run([
             'nmap', '-sS', '-sV', '--open', '-T4', 
-            '-oX', '-',  # вывод в XML формате в stdout
+            '-oX', '-',
             target
         ], capture_output=True, text=True, timeout=300)
         
@@ -637,14 +585,14 @@ def run_nmap(target):
         return {'success': False, 'error': str(e)}
 
 def run_nikto(target, port=80):
-    """Запуск Nikto для веб-сканирования"""
+    """Выполняет веб-сканирование с помощью Nikto для обнаружения распространенных уязвимостей"""
     try:
         print(f"[+] Запуск Nikto для {target}:{port}")
         url = f"http://{target}:{port}" if port != 443 else f"https://{target}"
         
         result = subprocess.run([
             'nikto', '-h', url,
-            '-o', '-',  # вывод в stdout
+            '-o', '-',
             '-Format', 'txt'
         ], capture_output=True, text=True, timeout=600)
         
@@ -659,13 +607,12 @@ def run_nikto(target, port=80):
         return {'success': False, 'error': str(e)}
 
 def run_gobuster(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt'):
-    """Запуск Gobuster для поиска директорий"""
+    """Выполняет поиск директорий и файлов на веб-сервере с помощью Gobuster"""
     try:
         print(f"[+] Запуск Gobuster для {target}:{port}")
         print(f"[+] Используется словарь: {wordlist}")
         url = f"http://{target}:{port}" if port != 443 else f"https://{target}"
         
-        # УБИРАЕМ -o - и используем только capture_output
         result = subprocess.run([
             'gobuster', 'dir', '-u', url, '-w', wordlist, '-q'
         ], capture_output=True, text=True, timeout=300)
@@ -700,12 +647,11 @@ def run_gobuster(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt
         return {'success': False, 'error': str(e)}
     
 def run_gobuster_vhost(target, port=80, wordlist='/usr/share/wordlists/dirb/common.txt'):
-    """Запуск Gobuster для поиска директорий"""
+    """Выполняет поиск виртуальных хостов с помощью Gobuster"""
     try:
         print(f"[+] Запуск Gobuster для {target}:{port}")
         url = f"http://{target}:{port}" if port != 443 else f"https://{target}"
         
-        # УБИРАЕМ -o - и используем только capture_output
         result = subprocess.run([
             'gobuster', 'vhost', '-u', url, '-w', wordlist, '-q'
         ], capture_output=True, text=True, timeout=300)
@@ -734,23 +680,20 @@ def run_gobuster_vhost(target, port=80, wordlist='/usr/share/wordlists/dirb/comm
         return {'success': False, 'error': str(e)}
     
 def run_custom_scan_and_update(target, port, scan_type, wordlist=None, main_scan_id=None, commands=None):
-    """Запускает кастомное сканирование и добавляет результаты в основное"""
+    """Запускает дополнительное сканирование и обновляет основные результаты"""
     try:
         if scan_type == 'dir':
             result = run_gobuster(target, port, wordlist)
         elif scan_type == 'vhost':
             result = run_gobuster_vhost(target, port, wordlist)
         elif scan_type == 'sqlmap':
-            # Для SQLMap передаем commands и target
             result = run_sqlmap(target, commands)
         else:
             return
         
-        # Добавляем результаты в основное сканирование
         if main_scan_id in scan_results:
             main_scan = scan_results[main_scan_id]
             
-            # Создаем ключ для дополнительного сканирования
             custom_key = f"custom_{scan_type}_{datetime.now().strftime('%H%M%S')}"
             
             if 'custom_scans' not in main_scan['results']:
@@ -769,7 +712,7 @@ def run_custom_scan_and_update(target, port, scan_type, wordlist=None, main_scan
         print(f"Error in custom scan: {e}")
 
 def parse_nmap_xml(xml_output):
-    """Парсим XML вывод Nmap для извлечения информации о портах"""
+    """Парсит XML вывод Nmap для извлечения информации об открытых портах и сервисах"""
     try:
         root = ET.fromstring(xml_output)
         ports_info = []
@@ -802,8 +745,8 @@ def parse_nmap_xml(xml_output):
         return []
     
 def run_arp_scan(network):
+    """Выполняет ARP сканирование сети для обнаружения активных хостов"""
     try:
-        # Запускаем nmap ARP ping scan
         result = subprocess.run([
             'nmap', '-sn', '-PR', network, '-oX', '-'
         ], capture_output=True, text=True, timeout=120)
@@ -811,7 +754,6 @@ def run_arp_scan(network):
         if result.returncode != 0:
             return []
         
-        # Парсим XML и извлекаем IP адреса
         ip_addresses = []
         root = ET.fromstring(result.stdout)
         
@@ -827,9 +769,8 @@ def run_arp_scan(network):
     return ip_addresses
 
 def scan_target(target, scan_data):
-    """Основная функция сканирования для одиночной цели"""
+    """Основная функция сканирования цели, координирующая различные инструменты проверки"""
     try:
-        # Nmap сканирование
         nmap_result = run_nmap(target)
         if nmap_result['success']:
             scan_data['results']['nmap'] = {
@@ -837,11 +778,9 @@ def scan_target(target, scan_data):
                 'parsed_ports': parse_nmap_xml(nmap_result['output'])
             }
             
-            # Запускаем CVE анализ в фоновом режиме
             print("[🚀] Запуск асинхронного CVE анализа...")
             start_cve_analysis_async(scan_data, nmap_result['output'])
 
-            # ⭐ ДОБАВИЛ: Запуск поиска эксплойтов
             print("[🔍] Запуск поиска эксплойтов...")
             exploit_result = search_exploits(nmap_xml=nmap_result['output'])
             if exploit_result['success']:
@@ -851,7 +790,6 @@ def scan_target(target, scan_data):
                     'timestamp': datetime.now().isoformat()
                 }
             
-            # Остальное сканирование продолжается без ожидания CVE
             web_ports = []
             for port_info in scan_data['results']['nmap']['parsed_ports']:
                 if port_info['state'] == 'open':
@@ -883,7 +821,7 @@ def scan_target(target, scan_data):
         scan_data['end_time'] = datetime.now().isoformat()
 
 def run_sqlmap(target, commands=None, timeout=300):
-    """Запуск SQLMap для тестирования SQL инъекций"""
+    """Выполняет тестирование на SQL инъекции с помощью SQLMap"""
     if commands is None:
         commands = f"-u {target} --batch --level=1 --risk=1"
     
@@ -913,17 +851,14 @@ def run_sqlmap(target, commands=None, timeout=300):
         print(f"[-] Ошибка SQLMap для {target}: {e}")
         return {'success': False, 'error': str(e)}
 
-
-# =====================================================================================================================
-
 @app.route('/')
 def index():
-    """Главная страница"""
+    """Главная страница веб-интерфейса сканера"""
     return render_template('index.html')
 
 @app.route('/api/upload_wordlist', methods=['POST'])
 def upload_wordlist():
-    """Загружает wordlist на сервер"""
+    """API endpoint для загрузки пользовательских wordlist файлов"""
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
     
@@ -932,7 +867,6 @@ def upload_wordlist():
         return jsonify({'error': 'No file selected'}), 400
     
     if file and (file.filename.endswith('.txt') or file.filename.endswith('.lst')):
-        # Сохраняем файл с уникальным именем
         filename = f"{uuid.uuid4().hex}_{file.filename}"
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         file.save(filepath)
@@ -947,7 +881,7 @@ def upload_wordlist():
 
 @app.route('/api/scan', methods=['POST'])
 def start_scan():
-    """API endpoint для запуска сканирования"""
+    """API endpoint для запуска сканирования цели или сети"""
     data = request.json
     target = data.get('target', '').strip()
     
@@ -957,10 +891,8 @@ def start_scan():
     ip_mask_strict_pattern = r'^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$'
     
     if bool(re.match(ip_mask_strict_pattern, target)):
-        # ARP сканирование сети
         ips = run_arp_scan(target)
         
-        # Сохраняем ARP сканирование в историю
         arp_scan_id = f"arp_{target}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         arp_scan_data = {
             'id': arp_scan_id,
@@ -987,7 +919,6 @@ def start_scan():
             'message': f'Найдено {len(ips)} хостов в сети {target}'
         })
     else:
-        # Одиночное сканирование
         scan_id = f"{target}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         scan_data = {
@@ -1001,7 +932,6 @@ def start_scan():
         
         scan_results[scan_id] = scan_data
         
-        # Запускаем сканирование в отдельном потоке
         thread = threading.Thread(target=scan_target, args=(target, scan_data))
         thread.daemon = True
         thread.start()
@@ -1015,7 +945,7 @@ def start_scan():
     
 @app.route('/api/scan/<scan_id>')
 def get_scan_status(scan_id):
-    """API endpoint для получения статуса сканирования"""
+    """API endpoint для получения статуса и результатов сканирования"""
     if scan_id not in scan_results:
         return jsonify({'error': 'Scan not found'}), 404
     
@@ -1023,14 +953,14 @@ def get_scan_status(scan_id):
 
 @app.route('/api/scans')
 def list_scans():
-    """API endpoint для списка всех сканирований"""
+    """API endpoint для получения списка всех выполненных сканирований"""
     return jsonify({
         'scans': list(scan_results.values())
     })
 
 @app.route('/report/<scan_id>')
 def view_report(scan_id):
-    """Страница с отчетом по сканированию"""
+    """Страница с детальным отчетом по сканированию"""
     if scan_id not in scan_results:
         return "Report not found", 404
     
@@ -1038,7 +968,7 @@ def view_report(scan_id):
 
 @app.route('/arp_report/<scan_id>')
 def view_arp_report(scan_id):
-    """Страница с отчетом по ARP сканированию"""
+    """Страница с отчетом по ARP сканированию сети"""
     if scan_id not in scan_results:
         return "ARP report not found", 404
     
@@ -1050,13 +980,12 @@ def view_arp_report(scan_id):
 
 @app.route('/save_as_pdf/<scan_id>')
 def save_scan_as_pdf(scan_id):
-    """Сохранение отчета сканирования в PDF"""
+    """Генерирует и возвращает PDF отчет по сканированию"""
     if scan_id not in scan_results:
         return "Scan not found", 404
     
     scan_data = scan_results[scan_id]
     
-    # Рендерим HTML для PDF
     if scan_data.get('type') == 'arp_scan':
         html_content = render_template('arp_report_pdf.html', scan=scan_data)
         filename = f"arp_scan_{scan_data['target']}.pdf"
@@ -1064,7 +993,6 @@ def save_scan_as_pdf(scan_id):
         html_content = render_template('report_pdf.html', scan=scan_data)
         filename = f"scan_{scan_data['target']}.pdf"
     
-    # Конвертируем в PDF
     try:
         pdf = pdfkit.from_string(html_content, False, configuration=PDF_CONFIG)
         
@@ -1077,13 +1005,10 @@ def save_scan_as_pdf(scan_id):
 
 @app.route('/save_dashboard_pdf')
 def save_dashboard_pdf():
-    """Сохранение главной страницы с историей в PDF"""
-    # Получаем все сканирования для отображения в PDF
+    """Генерирует PDF отчет главной страницы с историей сканирований"""
     all_scans = list(scan_results.values())
     
-    # Загружаем ARP историю из localStorage (эмулируем)
     arp_history = []
-    # В реальности нужно передавать через параметры или сессию
     
     html_content = render_template('dashboard_pdf.html', 
                                  scans=all_scans,
@@ -1099,10 +1024,9 @@ def save_dashboard_pdf():
     except Exception as e:
         return f"Error generating PDF: {str(e)}", 500
 
-# Новый endpoint для сохранения с передачей ARP истории
 @app.route('/save_dashboard_with_arp', methods=['POST'])
 def save_dashboard_with_arp():
-    """Сохранение дашборда с переданной ARP историей"""
+    """Генерирует PDF отчет дашборда с переданной историей ARP сканирований"""
     data = request.json
     arp_history = data.get('arp_history', [])
     
@@ -1124,14 +1048,14 @@ def save_dashboard_with_arp():
     
 @app.route('/api/custom_scan', methods=['POST'])
 def custom_scan():
-    """Endpoint для кастомного сканирования"""
+    """API endpoint для запуска дополнительных кастомных сканирований"""
     data = request.json
     target = data.get('target', '')
     scan_type = data.get('scan_type', 'dir')
     custom_wordlist = data.get('wordlist', '')
     port = data.get('port', 80)
     main_scan_id = data.get('main_scan_id', '')
-    commands = data.get('commands', '')  # ⭐ ДОБАВИЛ ЭТУ СТРОЧКУ!
+    commands = data.get('commands', '')
     
     if not target or not main_scan_id:
         return jsonify({'error': 'Target and main_scan_id are required'}), 400
@@ -1139,9 +1063,8 @@ def custom_scan():
     if main_scan_id not in scan_results:
         return jsonify({'error': 'Main scan not found'}), 404
     
-    # Запускаем в отдельном потоке
     thread = threading.Thread(target=run_custom_scan_and_update, 
-                             args=(target, port, scan_type, custom_wordlist, main_scan_id, commands))  # ⭐ И commands ЗДЕСЬ!
+                             args=(target, port, scan_type, custom_wordlist, main_scan_id, commands))
     thread.daemon = True
     thread.start()
     
@@ -1152,7 +1075,7 @@ def custom_scan():
 
 @app.route('/api/search_exploits', methods=['POST'])
 def api_search_exploits():
-    """API для поиска эксплойтов"""
+    """API endpoint для поиска эксплойтов через searchsploit"""
     data = request.json
     target = data.get('target', '')
     query = data.get('query', '')

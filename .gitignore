@@ -1,2 +1,4 @@
 .venv
 fstec_vul_db/__pycache__/
+.gigachat
+giga.py
