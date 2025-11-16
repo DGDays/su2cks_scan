@@ -1,5 +1,6 @@
 import redis
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 import xml.etree.ElementTree as ET
@@ -11,6 +12,66 @@ from typing import List, Dict, Optional
 # Сертификат МинЦифры
 CORE_DIR = Path(__file__).parent
 CERT_PATH = CORE_DIR / "cert" / "russian_trusted_combined_ca_pem.crt"
+
+
+def extract_version(version_string: str) -> str:
+    # Извлекает только первое появление версии вида x.x.x.x...
+    match = re.search(r"\d+(?:\.\d+)+", version_string)
+    return match.group() if match else ""
+
+def version_in_range(target_ver: str, ver_range_str: str) -> bool:
+    target_ver = extract_version(target_ver)
+    # Извлекает как минимум два появления версии вида x.x.x.x...
+    matches = re.findall(r"\d+(?:\.\d+)+", ver_range_str)
+
+    if len(matches) == 0:
+        return target_ver == ver_range_str
+
+    if len(matches) == 1:
+        return matches[0] == target_ver
+
+    if len(matches) >= 2:
+        min_ver = list(map(int, matches[0].split(".")))
+        max_ver = list(map(int, matches[1].split(".")))
+        tar_ver = list(map(int, target_ver.split(".")))
+
+        max_len = max(len(min_ver), len(max_ver))
+        min_ver = min_ver + [0] * (max_len - len(min_ver))
+        max_ver = max_ver + [0] * (max_len - len(max_ver))
+
+        for i in range(len(min_ver)):
+            if tar_ver[i] < min_ver[i] or tar_ver[i] > max_ver[i]:
+                #print(f"this failed: {target_ver}, {ver_range_str}, {i}, {tar_ver[i]}")
+                return False
+
+    #print(f"this succeeded: {target_ver}, {ver_range_str}, len: {len(matches)}")
+    return True
+
+def vuln_contains_version(vuln_data, target_version):
+    if target_version == "*" or not target_version:
+        return True
+        
+    # Нормализуем целевую версию
+    target_version = extract_version(target_version)
+    if not target_version:
+        return False
+        
+    software_list = vuln_data.get("software_list", [])
+    if not software_list:
+        return False
+        
+    for soft in software_list:
+        soft_version = soft.get("version", "")
+        if not soft_version:
+            continue
+            
+            
+        # Проверяем, содержит ли нормализованная версия ПО целевую версию
+        if version_in_range(target_version, soft_version):
+            return True
+            
+    return False
+
 
 
 class VulnerabilityDB:
@@ -205,8 +266,13 @@ class VulnerabilityDB:
         return vuln_data
 
     def find_vulnerabilities(
-        self, software_name=None, software_version=None, cve_id=None
+        self, software_name="*", software_version="*", vendor="*", cve_id=None, fuzzy=False
     ) -> List[Dict]:
+
+        # Оставляем версию формата x.x.x.x...
+        if software_version != "*":
+            software_version = extract_version(software_version)
+
         # Поиск по cve_id
         if cve_id is not None:
             cve_id = cve_id.lower()
@@ -226,9 +292,19 @@ class VulnerabilityDB:
 
             return results
 
+        # Размытый поиск
+        if fuzzy:
+            return self.fuzzy_search(software_name, software_version)
+
         # Получаем идентификаторы уязвимостей по ранее созданным группам уязвимостей (сгруппированы по одному названию софта и версии)
-        index_key = f"idx:{software_name.lower()}:{software_version.lower()}"
-        vuln_ids = self.r.smembers(index_key)
+        index_key = f"idx:{software_name.lower()}:*{software_version.lower()}*:{vendor.lower()}"
+        index_keys = self.r.keys(index_key)
+        
+        vuln_ids = []
+        for key in index_keys:
+            vuln_ids += self.r.smembers(key)
+
+        # print(vuln_ids)
 
         if not vuln_ids:
             return []
@@ -241,6 +317,107 @@ class VulnerabilityDB:
                 results.append(vuln_data)
 
         return results
+
+    def fuzzy_search(self, software_name: str, software_version="*") -> List[Dict]:
+        # Разобьем входное название ПО на слова
+        words = software_name.lower().split()
+        if not words:
+            return []
+
+        # Получим все возможные ключи по каждому из слов отдельно,
+        # запихнём в set, чтобы не повторялись
+        all_matching_keys = set()
+
+        # Перебираем слова по наименованию софта (software_name)
+        for word in words:
+            pattern = f"idx:*{word}*:*{software_version}*:*"
+            matching_keys = self.r.keys(pattern)
+            for key in matching_keys:
+                all_matching_keys.add(key)
+
+            # print(word, matching_keys)
+
+        # Перебираем слова по вендору софта (vendor)
+        for word in words:
+            pattern = f"idx:*:*{software_version}*:*{word}*"
+            matching_keys = self.r.keys(pattern)
+            for key in matching_keys:
+                all_matching_keys.add(key)
+
+        # Подсчитываем, сколько раз встречаются слова из "words" в каждом
+        # полученном ключе
+        seen_vuln_ids = set()
+        max_matched_words = 0
+
+        for key in list(all_matching_keys):
+            # ключи имеют вид: "idx:name:version:vendor"
+            parts = key.split(":")
+
+            # по сути не встречается такая ситуация, но мало ли
+            if len(parts) < 3:
+                print(parts)
+                continue
+
+            name = parts[1]
+            version = parts[2] if len(parts) > 2 else ""
+            vendor = parts[3] if len(parts) > 3 else ""
+
+            # подсчитываем сколько раз встречаются слова из "words" в
+            # рассматриваемом ключе
+            name_lower = name.lower()
+            matched_words = sum(1 for word in words if word in name_lower)
+
+            vendor_lower = vendor.lower()
+            matched_words += sum(1 for word in words if word in vendor_lower)
+
+            max_matched_words = max(max_matched_words, matched_words)
+
+
+        # Возьмём только те ключи, в которых самое большое количество
+        # совпадающих слов
+        filtered_results = []
+        for key in list(all_matching_keys):
+            # ключи имеют вид: "idx:name:version:vendor"
+            parts = key.split(":")
+
+            # по сути не встречается такая ситуация, но мало ли
+            if len(parts) < 3:
+                print(parts)
+                continue
+
+            name = parts[1]
+            version = parts[2] if len(parts) > 2 else ""
+            vendor = parts[3] if len(parts) > 3 else ""
+
+            # подсчитываем сколько раз встречаются слова из "words" в
+            # рассматриваемом ключе
+            name_lower = name.lower()
+            matched_words = sum(1 for word in words if word in name_lower)
+
+            vendor_lower = vendor.lower()
+            matched_words += sum(1 for word in words if word in vendor_lower)
+
+            # По сути не встречается такая ситуация, но МАЛО ЛИ
+            if matched_words == 0:
+                continue
+
+            # Получаем уязвимости по данному ключу
+            vulns = self.find_vulnerabilities(name, version, vendor)
+
+            for vuln in vulns:
+                vuln_id = vuln.get("identifier")
+                if not vuln_id or vuln_id in seen_vuln_ids:
+                    continue
+
+                if not vuln_contains_version(vuln, software_version):
+                    continue
+
+                # Сохраняем с количеством встречающихся слов, для сортировки по актуальности
+                filtered_results.append(vuln)
+                seen_vuln_ids.add(vuln_id)
+
+        # Пихаем отсортированные уязвимости
+        return filtered_results[:9]
 
     def clear_database(self) -> None:
         keys = self.r.keys("vuln:*")

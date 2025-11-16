@@ -41,11 +41,11 @@ def main():
     print("Проверяем поиск по программе и версии...")
 
     software_name = "Java Development Kit"
-    # software_version = "1.7.0 update 45"
+    software_version = "1.7.0 update 45"
 
     print(f"Поиск уязвимостей по программе: {software_name}")
     vulnerabilities = db.find_vulnerabilities(
-        software_name=software_name,
+        software_name=software_name, software_version=software_version
     )
 
     print(f"Нашлось {len(vulnerabilities)} уязвимостей:")
