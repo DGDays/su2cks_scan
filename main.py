@@ -33,6 +33,7 @@ app = Flask(__name__)
 # Хранилище результатов сканирований
 scan_results = {}
 UPLOAD_FOLDER = '/tmp/pentest_scanner_wordlists'
+GIGACHAD_TOKEN = "token"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # =====================================================================================================================
@@ -175,19 +176,22 @@ def start_cve_analysis_async(scan_data, nmap_output):
                             'publication_date': fstec_vuln.get('publication_date', 'N/A'),
                             'solution': fstec_vuln.get('solution', 'N/A')
                         })
-            gigachat_responses = dict()
-            for i in nvd_vulnerabilities+fstec_vulnerabilities:
-                giga = GigaChat(
-                    ca_bundle_file="./fstec_vul_db/cert/russian_trusted_combined_ca_pem.crt",
-                    credentials="token",
-                    scope="GIGACHAT_API_PERS",
-                    model="GigaChat"
-                )
-                response = giga.chat("Привет. Проанализируй, пожалуйста, данную уязвимость. Что можешь сказать о ней? Ответ нужен краткий, но ёмкий. Буквально на 5-6 предложений. Уязвимость: "+str(i)).choices[0].message.content
-                try:
-                    gigachat_responses[i["cve_id"]] = response
-                except:
-                    gigachat_responses[i["vuln_id"]] = response
+
+            if GIGACHAD_TOKEN != 'token':
+                gigachat_responses = dict()
+                for i in nvd_vulnerabilities+fstec_vulnerabilities:
+                    giga = GigaChat(
+                        ca_bundle_file="./fstec_vul_db/cert/russian_trusted_combined_ca_pem.crt",
+                        credentials=GIGACHAD_TOKEN,
+                        scope="GIGACHAT_API_PERS",
+                        model="GigaChat"
+                    )
+                    response = giga.chat("Привет. Проанализируй, пожалуйста, данную уязвимость. Что можешь сказать о ней? Ответ нужен краткий, но ёмкий. Буквально на 5-6 предложений. Уязвимость: "+str(i)).choices[0].message.content
+                    try:
+                        gigachat_responses[i["cve_id"]] = response
+                    except:
+                        gigachat_responses[i["vuln_id"]] = response
+                scan_data['results']['ai_analysis'] = gigachat_responses
             
             # Сохраняем результаты ОТДЕЛЬНО
             scan_data['results']['vulnerability_analysis'] = {
@@ -198,7 +202,6 @@ def start_cve_analysis_async(scan_data, nmap_output):
                 'total_found': len(nvd_vulnerabilities) + len(fstec_vulnerabilities),
                 'scan_time': datetime.now().isoformat()
             }
-            scan_data['results']['ai_analysis'] = gigachat_responses
             
             print(f"[✅] Анализ уязвимостей завершен: "
                   f"NVD: {len(nvd_vulnerabilities)}, ФСТЭК: {len(fstec_vulnerabilities)}")
