@@ -2,7 +2,6 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-2.0%2B-lightgrey)](https://flask.palletsprojects.com/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Многофункциональный сканер безопасности с веб-интерфейсом для проведения пентестов, анализа уязвимостей и генерации отчетов.
 
